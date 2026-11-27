@@ -143,11 +143,11 @@ export const GameHud = memo(function GameHud({
   });
 
   return (
-    <div className="fixed inset-0 pointer-events-none select-none z-20 flex flex-col justify-between pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.5rem,env(safe-area-inset-left))] pr-[max(0.5rem,env(safe-area-inset-right))] sm:p-3">
+    <div className="absolute inset-0 pointer-events-none select-none z-20 flex flex-col justify-between pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.5rem,env(safe-area-inset-left))] pr-[max(0.5rem,env(safe-area-inset-right))] sm:p-3">
       {isCriticalHp && (
         <div
           aria-hidden="true"
-          className="fixed inset-0 pointer-events-none"
+          className="absolute inset-0 pointer-events-none"
           style={{
             boxShadow: 'inset 0 0 80px rgba(225, 29, 72, 0.5)',
           }}
@@ -525,7 +525,7 @@ export const GameHud = memo(function GameHud({
           data-testid="combo-milestone-overlay"
           role="status"
           aria-live="polite"
-          className="fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] sm:bottom-5 sm:left-5 max-w-[calc(100vw-1.5rem)] pointer-events-none z-25"
+          className="absolute bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] sm:bottom-5 sm:left-5 max-w-[calc(100%-1.5rem)] pointer-events-none z-25"
         >
           <div
             className="animate-anime-cutin relative overflow-hidden flex items-center gap-2 sm:gap-2.5 px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg border-2 border-[#090D16] shadow-[0_4px_0_#090D16]"
@@ -585,7 +585,7 @@ export const GameHud = memo(function GameHud({
       {showTouchThumbDock && !hud.comboMilestone && (
         <div
           aria-hidden="true"
-          className="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] left-[max(0.5rem,env(safe-area-inset-left))] pointer-events-none px-2 py-1 rounded-md bg-[#0B1422]/60 border border-slate-700/50 text-[10px] font-semibold tracking-wide text-slate-300/85"
+          className="absolute bottom-[max(0.5rem,env(safe-area-inset-bottom))] left-[max(0.5rem,env(safe-area-inset-left))] pointer-events-none px-2 py-1 rounded-md bg-[#0B1422]/60 border border-slate-700/50 text-[10px] font-semibold tracking-wide text-slate-300/85"
         >
           ◀ Mover ▶
         </div>

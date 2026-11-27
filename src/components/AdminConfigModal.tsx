@@ -89,7 +89,7 @@ export function AdminConfigModal({ config, onSave, onUnlocksChanged, onClose }: 
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-3 sm:p-6"
+      className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-3 sm:p-6"
       role="dialog"
       aria-modal="true"
       aria-labelledby="admin-modal-title"

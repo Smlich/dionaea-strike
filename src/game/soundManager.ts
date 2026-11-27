@@ -292,7 +292,7 @@ export class WebAudioSoundManager {
   }
 
   /**
-   * Temporary system-level mute (e.g., browser tab hidden, window blur, or Poki commercialBreak)
+   * Temporary system-level mute (e.g., browser tab hidden or window blur)
    * that preserves the player's own manual mute setting when cleared.
    */
   public setSystemMuted(muted: boolean) {

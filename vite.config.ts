@@ -4,23 +4,9 @@ import path from 'path';
 import { defineConfig, type PluginOption } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
-function pokiSdkHtmlPlugin(enabled: boolean): PluginOption {
-  return {
-    name: 'poki-sdk-html-inject',
-    transformIndexHtml(html) {
-      if (!enabled) return html;
-      return html.replace(
-        '</head>',
-        '    <script src="https://game-cdn.poki.com/scripts/v2/poki-sdk.js"></script>\n  </head>'
-      );
-    },
-  };
-}
-
 export default defineConfig(() => {
   const enablePwa = process.env.ENABLE_PWA === 'true';
-  const isPokiBuild = process.env.POKI_BUILD === 'true';
-  const plugins: PluginOption[] = [react(), tailwindcss(), pokiSdkHtmlPlugin(isPokiBuild)];
+  const plugins: PluginOption[] = [react(), tailwindcss()];
 
   if (enablePwa) {
     plugins.push(

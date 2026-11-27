@@ -30,7 +30,7 @@ export function HighScoreModal({ records, onResetRecords, onClose }: HighScoreMo
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-slate-950/80 p-3 sm:p-5"
+      className="absolute inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-slate-950/80 p-3 sm:p-5"
       role="dialog"
       aria-modal="true"
       aria-labelledby="highscores-modal-title"

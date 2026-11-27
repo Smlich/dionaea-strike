@@ -19,7 +19,6 @@ import {
 import { soundEngine } from '../game/audio';
 import { preloadStageBackground } from '../game/backgroundAssets';
 import { loadDifficulty, saveDifficulty } from '../game/difficulty';
-import { pokiSdk } from '../game/pokiSdk';
 import {
   computeGamepadEdges,
   computeLogicalViewport,
@@ -86,8 +85,12 @@ export interface CarnivoraShmupGameProps {
   onConfigChange?: (config: GameConfig) => void;
   /** Callback opcional que se dispara al finalizar una partida (ideal para POST /api/game/scores en MongoDB). */
   onScoreSubmit?: (result: GameSessionResult) => void;
-  /** Ruta base opcional si montás el juego bajo un subpath en tu web MERN (ej: '/juego/'). Por defecto '/'. */
+  /** Ruta base opcional si montás el juego bajo un subpath en tu web MERN (ej: '/juego/'). Por defecto '.'. */
   assetBasePath?: string;
+  /** Omite el video de introducción y abre directamente en la pantalla de título. Por defecto false. */
+  skipIntro?: boolean;
+  /** Clases CSS opcionales para adaptar alto/ancho cuando se embebe dentro del layout de una web (por defecto 'w-full h-dvh'). */
+  className?: string;
 }
 
 function createInitialHud(cfg: GameConfig): HudSnapshot {
@@ -167,14 +170,11 @@ function createInitialHud(cfg: GameConfig): HudSnapshot {
   };
 }
 
-function getInitialStatus(): GameStatus {
+function getInitialStatus(skipIntroProp = false): GameStatus {
+  if (skipIntroProp) return 'title';
   if (typeof window === 'undefined') return 'title';
   const params = new URLSearchParams(window.location.search);
   if (params.get('autostart') === '1' || params.get('skipIntro') === '1') {
-    return 'title';
-  }
-  // Skip the pre-title video on Poki / iframe portals to maximize Conversion-to-Play (C2P).
-  if (pokiSdk.isEmbeddedInPortal()) {
     return 'title';
   }
   return 'intro';
@@ -186,10 +186,14 @@ export function CarnivoraShmupGame({
   onConfigChange,
   onScoreSubmit,
   assetBasePath = '.',
+  skipIntro = false,
+  className = 'w-full h-dvh',
 }: CarnivoraShmupGameProps) {
   const [config, setConfig] = useState<GameConfig>(() => initialConfig ?? loadGameConfig());
-  const [status, setStatus] = useState<GameStatus>(() => getInitialStatus());
-  const [introOverlayMounted, setIntroOverlayMounted] = useState<boolean>(() => getInitialStatus() === 'intro');
+  const [status, setStatus] = useState<GameStatus>(() => getInitialStatus(skipIntro));
+  const [introOverlayMounted, setIntroOverlayMounted] = useState<boolean>(
+    () => getInitialStatus(skipIntro) === 'intro'
+  );
   const [introExitRequested, setIntroExitRequested] = useState<boolean>(false);
   const [titleRevealFromIntro, setTitleRevealFromIntro] = useState<boolean>(false);
   const [hud, setHud] = useState<HudSnapshot>(() => createInitialHud(config));
@@ -227,7 +231,6 @@ export function CarnivoraShmupGame({
   const showRecordsRef = useRef<boolean>(false);
   const onScoreSubmitRef = useRef(onScoreSubmit);
   const submittedRunRef = useRef<boolean>(false);
-  const adBreakBusyRef = useRef<boolean>(false);
   const touchMoveRef = useRef<{
     pointerId: number;
     anchorPlayerX: number;
@@ -268,9 +271,6 @@ export function CarnivoraShmupGame({
 
     if (status === 'playing') {
       submittedRunRef.current = false;
-      pokiSdk.notifyGameplayStart();
-    } else {
-      pokiSdk.notifyGameplayStop();
     }
 
     if (status === 'title' || status === 'paused' || status === 'level_clear') {
@@ -512,38 +512,13 @@ export function CarnivoraShmupGame({
     canvasRef.current?.focus();
   }, [isTouchDevice, requestMobileLandscapeFullscreen]);
 
-  const runWithCommercialBreak = useCallback(async (action: () => void) => {
-    if (adBreakBusyRef.current) return;
-    adBreakBusyRef.current = true;
-    try {
-      simRef.current?.clearInputs();
-      await pokiSdk.requestCommercialBreak({
-        onBeforeAd: () => {
-          simRef.current?.clearInputs();
-          soundEngine.setSystemMuted(true);
-        },
-        onAfterAd: () => {
-          if (typeof document === 'undefined' || !document.hidden) {
-            soundEngine.setSystemMuted(false);
-          }
-        },
-      });
-      action();
-    } finally {
-      adBreakBusyRef.current = false;
-    }
-  }, []);
-
-  /** First-session Start from Title Screen: immediate gameplay with zero pre-roll commercial break (Poki QA rule). */
   const handleStart = useCallback(() => {
-    if (adBreakBusyRef.current) return;
     launchFreshRun();
   }, [launchFreshRun]);
 
-  /** Retry / Restart transition back into gameplay: requests a Poki commercial break cleanly if available. */
-  const handleRetryWithAd = useCallback(() => {
-    void runWithCommercialBreak(launchFreshRun);
-  }, [launchFreshRun, runWithCommercialBreak]);
+  const handleRestart = useCallback(() => {
+    launchFreshRun();
+  }, [launchFreshRun]);
 
   const handleTogglePause = useCallback(() => {
     const sim = simRef.current;
@@ -635,20 +610,16 @@ export function CarnivoraShmupGame({
 
   const handleContinueNextLevel = useCallback(() => {
     const sim = simRef.current;
-    if (!sim || statusRef.current !== 'level_clear' || adBreakBusyRef.current) return;
+    if (!sim || statusRef.current !== 'level_clear') return;
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
-    void runWithCommercialBreak(() => {
-      const liveSim = simRef.current;
-      if (!liveSim || statusRef.current !== 'level_clear') return;
-      if (liveSim.continueToNextLevel()) {
-        soundEngine.playUiConfirm();
-        soundEngine.restartLevelMusic(liveSim.getLevelIndex());
-        canvasRef.current?.focus();
-      }
-    });
-  }, [runWithCommercialBreak]);
+    if (sim.continueToNextLevel()) {
+      soundEngine.playUiConfirm();
+      soundEngine.restartLevelMusic(sim.getLevelIndex());
+      canvasRef.current?.focus();
+    }
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -658,7 +629,7 @@ export function CarnivoraShmupGame({
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
 
-    // Lazy-preload only Level 1 backdrop and Menu audio to keep initial download lean for Poki C2P.
+    // Preload only Level 1 backdrop and menu audio to keep initial page load fast.
     preloadStageBackground('pampa_dawn');
     soundEngine.preloadGameAudio();
 
@@ -668,12 +639,6 @@ export function CarnivoraShmupGame({
       (nextStatus) => setStatus(nextStatus)
     );
     simRef.current = sim;
-
-    // Initialize Poki SDK v2 safely (works seamlessly with adblockers or standalone web hosts).
-    void pokiSdk.init().finally(() => {
-      pokiSdk.notifyLoadingFinished();
-      document.body.dataset.pokiReady = '1';
-    });
 
     // Cap DPR at 1.5x (44% fewer pixels on Retina/mobile while remaining crisp) and allow
     // automatic step-down to 1.0x if sustained frame time exceeds 23ms on slower GPUs.
@@ -823,20 +788,16 @@ export function CarnivoraShmupGame({
       } else if (cur === 'level_clear') {
         if (edges.confirmPressed || edges.pausePressed) {
           soundEngine.unlockMusicOnGesture();
-          void runWithCommercialBreak(() => {
-            if (statusRef.current === 'level_clear' && sim.continueToNextLevel()) {
-              soundEngine.playUiConfirm();
-              soundEngine.restartLevelMusic(sim.getLevelIndex());
-            }
-          });
+          if (sim.continueToNextLevel()) {
+            soundEngine.playUiConfirm();
+            soundEngine.restartLevelMusic(sim.getLevelIndex());
+          }
         }
       } else if (cur === 'gameover' || cur === 'victory') {
         if (edges.confirmPressed || edges.pausePressed) {
           soundEngine.unlockMusicOnGesture();
-          void runWithCommercialBreak(() => {
-            sim.startNewGame();
-            soundEngine.restartLevelMusic(1);
-          });
+          sim.startNewGame();
+          soundEngine.restartLevelMusic(1);
         }
       }
     };
@@ -900,14 +861,7 @@ export function CarnivoraShmupGame({
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (adBreakBusyRef.current) {
-        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
-          e.preventDefault();
-        }
-        return;
-      }
-
-      // Poki QA: prevent Arrow keys & Space from scrolling the host page across all game screens.
+      // Prevent Arrow keys & Space from scrolling the host page while the game is mounted.
       if (
         !isEditableTarget(e.target) &&
         ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)
@@ -956,12 +910,10 @@ export function CarnivoraShmupGame({
         soundEngine.unlockMusicOnGesture();
         if (e.code === 'Enter' || e.code === 'Space') {
           e.preventDefault();
-          void runWithCommercialBreak(() => {
-            if (statusRef.current === 'level_clear' && sim.continueToNextLevel()) {
-              soundEngine.playUiConfirm();
-              soundEngine.restartLevelMusic(sim.getLevelIndex());
-            }
-          });
+          if (sim.continueToNextLevel()) {
+            soundEngine.playUiConfirm();
+            soundEngine.restartLevelMusic(sim.getLevelIndex());
+          }
         }
         return;
       }
@@ -979,10 +931,8 @@ export function CarnivoraShmupGame({
       }
 
       if (e.code === 'KeyR' && statusRef.current === 'playing') {
-        void runWithCommercialBreak(() => {
-          sim.startNewGame();
-          soundEngine.restartLevelMusic(1);
-        });
+        sim.startNewGame();
+        soundEngine.restartLevelMusic(1);
         return;
       }
 
@@ -1009,7 +959,7 @@ export function CarnivoraShmupGame({
     };
 
     const resumeOnFocusOrShow = () => {
-      if (!document.hidden && !pokiSdk.isCommercialBreakActive()) {
+      if (!document.hidden) {
         soundEngine.setSystemMuted(false);
       }
     };
@@ -1048,7 +998,7 @@ export function CarnivoraShmupGame({
 
     return () => {
       disposed = true;
-      pokiSdk.notifyGameplayStop();
+      delete document.body.dataset.state;
       soundEngine.setSystemMuted(false);
       soundEngine.stopMusic();
       cancelAnimationFrame(rafId);
@@ -1098,7 +1048,7 @@ export function CarnivoraShmupGame({
           e.preventDefault();
         }
       }}
-      className="dionaea-game-root relative w-full h-dvh overflow-hidden select-none bg-[#08101C]"
+      className={`dionaea-game-root relative overflow-hidden select-none bg-[#08101C] ${className}`}
     >
       <canvas
         ref={canvasRef}
@@ -1204,7 +1154,7 @@ export function CarnivoraShmupGame({
       {status === 'title' && (
         <div
           data-testid="title-screen-container"
-          className="fixed inset-0 z-30 h-dvh overflow-hidden [@media(max-height:280px)]:overflow-y-auto overscroll-contain"
+          className="absolute inset-0 z-30 h-full overflow-hidden [@media(max-height:280px)]:overflow-y-auto overscroll-contain"
         >
           <div className="relative h-full min-h-0 flex flex-col justify-between">
             {!bgFailed ? (
@@ -1213,21 +1163,21 @@ export function CarnivoraShmupGame({
                 alt="Biplano carnívoro Dionaea argentino y Sapo Batricio enfrentando artrópodos invasores"
                 referrerPolicy="no-referrer"
                 onError={() => setBgFailed(true)}
-                className={`fixed inset-0 w-full h-full object-cover object-[70%_center] sm:object-[76%_center] lg:object-right pointer-events-none ${
+                className={`absolute inset-0 w-full h-full object-cover object-[70%_center] sm:object-[76%_center] lg:object-right pointer-events-none ${
                   titleRevealFromIntro ? 'animate-title-hero-reveal' : ''
                 }`}
               />
             ) : (
               <div
                 aria-hidden="true"
-                className="fixed inset-0 bg-gradient-to-br from-[#08101C] via-[#133142] to-[#1E4B45] pointer-events-none"
+                className="absolute inset-0 bg-gradient-to-br from-[#08101C] via-[#133142] to-[#1E4B45] pointer-events-none"
               />
             )}
 
             {/* Measured editorial scrim keeping left UI >= 4.5:1 while letting protagonist biplane shine brightly on right */}
             <div
               aria-hidden="true"
-              className="fixed inset-0 pointer-events-none bg-gradient-to-b from-[#070E1A]/90 via-[#091220]/78 to-[#070E1A]/94 lg:bg-gradient-to-r lg:from-[#070E1A]/95 lg:via-[#081220]/76 lg:via-[46%] lg:to-transparent"
+              className="absolute inset-0 pointer-events-none bg-gradient-to-b from-[#070E1A]/90 via-[#091220]/78 to-[#070E1A]/94 lg:bg-gradient-to-r lg:from-[#070E1A]/95 lg:via-[#081220]/76 lg:via-[46%] lg:to-transparent"
             />
 
             {/* Top Utility Bar: Xbox Detection Banner + Audio Toggle */}
@@ -1688,7 +1638,7 @@ export function CarnivoraShmupGame({
           onToggleFullscreen={handleToggleFullscreen}
           onToggleMute={handleToggleMute}
           onPause={handleTogglePause}
-          onRestart={handleRetryWithAd}
+          onRestart={handleRestart}
           onTriggerSpecial={() => simRef.current?.triggerSpecialPulse()}
           onFireSecondary={() => simRef.current?.fireSecondaryAbility()}
           onSwapAbilities={() => simRef.current?.swapActiveAbilities()}
@@ -1698,7 +1648,7 @@ export function CarnivoraShmupGame({
       {/* LEVEL CLEAR INTERMISSION MODAL */}
       {status === 'level_clear' && hud.clearedLevelSummary && (
         <div
-          className="fixed inset-0 z-40 flex items-start sm:items-center justify-center overflow-y-auto bg-slate-950/75 p-3 sm:p-4"
+          className="absolute inset-0 z-40 flex items-start sm:items-center justify-center overflow-y-auto bg-slate-950/75 p-3 sm:p-4"
           role="dialog"
           aria-modal="true"
           aria-label={`Nivel ${hud.clearedLevelSummary.clearedLevel} completado`}
@@ -1818,7 +1768,7 @@ export function CarnivoraShmupGame({
       {/* PAUSED MODAL */}
       {status === 'paused' && !(isAdmin && showAdmin) && (
         <div
-          className="fixed inset-0 z-40 flex items-start sm:items-center justify-center overflow-y-auto bg-slate-950/70 p-3 sm:p-4"
+          className="absolute inset-0 z-40 flex items-start sm:items-center justify-center overflow-y-auto bg-slate-950/70 p-3 sm:p-4"
           role="dialog"
           aria-modal="true"
           aria-label="Juego en pausa"
@@ -1917,7 +1867,7 @@ export function CarnivoraShmupGame({
               </button>
               <button
                 type="button"
-                onClick={handleRetryWithAd}
+                onClick={handleRestart}
                 className="touch-manipulation w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 font-semibold text-sm border border-slate-700 cursor-pointer"
               >
                 Reiniciar
@@ -1946,7 +1896,7 @@ export function CarnivoraShmupGame({
       {/* VICTORY / GAME OVER MODAL */}
       {(status === 'victory' || status === 'gameover') && (
         <div
-          className="fixed inset-0 z-40 flex items-start sm:items-center justify-center overflow-y-auto bg-slate-950/75 p-3 sm:p-4"
+          className="absolute inset-0 z-40 flex items-start sm:items-center justify-center overflow-y-auto bg-slate-950/75 p-3 sm:p-4"
           role="dialog"
           aria-modal="true"
           aria-label={status === 'victory' ? 'Victoria' : 'Fin de la partida'}
@@ -2024,7 +1974,7 @@ export function CarnivoraShmupGame({
               <button
                 type="button"
                 data-start="true"
-                onClick={handleRetryWithAd}
+                onClick={handleRestart}
                 className="touch-manipulation w-full py-2.5 sm:py-3 rounded-xl bg-[#E11D48] hover:bg-[#BE123C] text-white font-display font-extrabold text-sm border-2 border-[#0B1120] shadow-[0_3px_0_#0B1120] inline-flex items-center justify-center gap-2 cursor-pointer"
               >
                 {isXbox && (
@@ -2101,7 +2051,7 @@ export function CarnivoraShmupGame({
           role="dialog"
           aria-modal="true"
           aria-label="Girá tu teléfono a modo horizontal para jugar"
-          className="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-5 px-6 text-center bg-[#08101C]/96 backdrop-blur-md"
+          className="absolute inset-0 z-[60] flex flex-col items-center justify-center gap-5 px-6 text-center bg-[#08101C]/96 backdrop-blur-md"
         >
           <div className="w-24 h-24 rounded-3xl bg-[#0F1C30] border-2 border-emerald-400/50 shadow-[0_6px_0_#050810] flex items-center justify-center">
             <Smartphone className="w-12 h-12 text-emerald-400 animate-rotate-phone" />

@@ -181,7 +181,7 @@ export function CreatorIntroOverlay({
     <div
       data-testid="creator-intro-overlay"
       data-transition-phase={phase}
-      className={`fixed inset-0 z-50 overflow-hidden ${
+      className={`absolute inset-0 z-50 overflow-hidden ${
         isTransitioning ? 'pointer-events-none' : ''
       }`}
     >
@@ -227,7 +227,7 @@ export function CreatorIntroOverlay({
           {/* Subtle bottom progress hairline */}
           <div
             aria-hidden="true"
-            className={`fixed bottom-0 left-0 right-0 h-1 bg-slate-900/80 pointer-events-none transition-opacity duration-150 ${
+            className={`absolute bottom-0 left-0 right-0 h-1 bg-slate-900/80 pointer-events-none transition-opacity duration-150 ${
               isTransitioning ? 'opacity-0' : 'opacity-100'
             }`}
           >
@@ -239,7 +239,7 @@ export function CreatorIntroOverlay({
 
           {/* Bottom-right intro controls (Safe area aware) */}
           <div
-            className={`fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-[max(1rem,env(safe-area-inset-right))] sm:bottom-6 sm:right-6 z-20 flex items-center gap-2 transition-opacity duration-150 ${
+            className={`absolute bottom-[max(1rem,env(safe-area-inset-bottom))] right-[max(1rem,env(safe-area-inset-right))] sm:bottom-6 sm:right-6 z-20 flex items-center gap-2 transition-opacity duration-150 ${
               isTransitioning ? 'opacity-0 pointer-events-none' : 'opacity-100'
             }`}
           >
@@ -282,7 +282,7 @@ export function CreatorIntroOverlay({
           <div
             aria-hidden="true"
             data-testid="intro-transition-curtain"
-            className={`pointer-events-none fixed inset-y-0 -left-[40%] w-[180%] z-30 flex overflow-hidden shadow-[0_0_60px_rgba(5,8,16,0.9)] ${
+            className={`pointer-events-none absolute inset-y-0 -left-[40%] w-[180%] z-30 flex overflow-hidden shadow-[0_0_60px_rgba(5,8,16,0.9)] ${
               phase === 'revealing' ? 'animate-intro-curtain-out' : 'animate-intro-curtain-in'
             }`}
           >
@@ -325,7 +325,7 @@ export function CreatorIntroOverlay({
             <div
               aria-hidden="true"
               data-testid="intro-transition-flash"
-              className="pointer-events-none fixed inset-0 z-40 animate-intro-flash bg-[radial-gradient(circle_at_70%_48%,rgba(254,240,138,0.82),rgba(56,189,248,0.26)_42%,transparent_74%)]"
+              className="pointer-events-none absolute inset-0 z-40 animate-intro-flash bg-[radial-gradient(circle_at_70%_48%,rgba(254,240,138,0.82),rgba(56,189,248,0.26)_42%,transparent_74%)]"
             />
           )}
         </>

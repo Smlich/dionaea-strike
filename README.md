@@ -1,38 +1,34 @@
 # Dionaea Strike — Escuadrón Pampa
 
-Shoot 'em up aéreo de desplazamiento lateral en React, TypeScript y Canvas 2D con estética anime. Pilota un biplano carnívoro sobre cinco regiones terrestres, fusiona habilidades botánicas rotativas y combate junto a mascotas copiloto al ritmo de la música de cada nivel.
+Shoot 'em up aéreo de desplazamiento lateral en **React 19 + TypeScript + Tailwind CSS v4 + Canvas 2D** con estética anime argentina. Diseñado tanto para ejecutarse de forma independiente como para integrarse directamente dentro de la web de **Carnívoras Tucumán**.
 
 ## Características principales
 
+- **Video de introducción + transición anime:** cortina diagonal celeste, blanca, dorada y carmesí con líneas de velocidad, destello suave y soporte para `prefers-reduced-motion`.
 - **5 niveles terrestres:** Amanecer en La Pampa, Selva Misionera y Cataratas, Buenos Aires Nocturno, Viaducto y Puerto Urbano, y Quebrada de Humahuaca / Andes, cada uno con mini-jefe, jefe final y pista musical propia sincronizada por BPM.
-- **8 especies de plantas carnívoras:**
-  - Iniciales: *Dionaea*, *Drosera*, *Nepenthes* y *Utricularia*.
-  - Desbloqueables por nivel: *Sarracenia*, *Pinguicula*, *Heliamphora* y *Cephalotus*.
-  - Sistema de **2 ranuras activas** (Nv. 1–4) o **Evolución Secreta pura (Nv. 5)** al recolectar cápsulas de una sola especie.
-- **Habilidades duales rotativas:** ataque principal automático y habilidad secundaria manual (`E` / clic derecho / `A` o `RT`), intercambiables en vuelo (`Q` / `X` o `LB`).
-- **5 mascotas copiloto desbloqueables:** *Sapo Batricio*, *Roy*, *Sicario*, *Palito* y *Carpincho Matero*, cada una con defensa cercana y poder especial (`Espacio` / `B` o `LT`).
-- **Controles completos y PWA:** teclado, ratón/táctil y control Xbox con detección automática de gamepad, además de soporte instalable offline con `vite-plugin-pwa`.
+- **8 especies de plantas carnívoras:** *Dionaea*, *Drosera*, *Nepenthes*, *Utricularia*, *Sarracenia*, *Pinguicula*, *Heliamphora* y *Cephalotus*, con sistema de **2 ranuras activas** (Nv. 1–4), **Fusión Ápice** y **Evolución Secreta (Nv. 5)**.
+- **5 mascotas copiloto desbloqueables:** *Sapo Batricio*, *Roy*, *Sicario*, *Palito* y *Carpincho Matero*, con defensa cercana y poder especial (`Espacio` / `B` / `LT`).
+- **3 modos de dificultad** (*Fácil*, *Normal*, *Difícil*) con escalado dinámico y tabla local/global de récords.
+- **Controles completos:** teclado, ratón, pantalla táctil con modo horizontal automático en móvil y mando Xbox con detección automática.
+- **Listo para embeber:** estilos aislados en `src/dionaea-styles.css` (no pisa el scroll ni el fondo global del sitio anfitrión) y overlays contenidos dentro de `.dionaea-game-root`.
 
 ## Requisitos
 
 - Node.js 20+ y npm
 
-## Instalación y comandos
+## Comandos
 
 ```bash
 npm install
-npm run dev
+npm run dev      # Servidor de desarrollo en http://localhost:3000
+npm test         # Suite completa de pruebas unitarias (54 tests)
+npm run lint     # Verificación estricta de TypeScript (tsc --noEmit)
+npm run build    # Compilación de producción en dist/
+npm run preview  # Previsualizar el build de producción
+npm run clean    # Limpiar dist/ y dev-dist/
 ```
 
-Otros comandos disponibles:
+## Integración en la página web
 
-- `npm test`: ejecuta la suite de pruebas en [src/game/fusionRules.test.ts](src/game/fusionRules.test.ts)
-- `npm run lint`: verifica tipos con `tsc --noEmit`
-- `npm run build`: genera la compilación de producción en `dist/`
-- `npm run preview`: previsualiza el build de producción
-- `npm run clean`: limpia `dist/` y `dev-dist/`
-
-## Modo Administrador e integración MERN
-
-- Añade `?admin=1` a la URL en local para abrir el panel de configuración (`AdminConfigModal`), editar parámetros de especies, enemigos, oleadas y jefes, o exportar/importar la configuración en JSON.
-- Consulta [MERN_INTEGRATION.md](MERN_INTEGRATION.md) para integrar `CarnivoraShmupGame` dentro de una aplicación MongoDB + Express + React + Node.
+- Consulta [MERN_INTEGRATION.md](MERN_INTEGRATION.md) para el manifiesto exacto de archivos, props del componente (`CarnivoraShmupGameProps`), rutas de assets y endpoints Express/MongoDB para integrar el juego directamente en tu sitio web.
+- En desarrollo local, añadí `?admin=1` a la URL para abrir el panel de configuración (`AdminConfigModal`).

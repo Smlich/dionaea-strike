@@ -257,7 +257,7 @@ test('WebAudioSoundManager initializes master -> compressor -> destination graph
   manager.setMuted(false);
   assert.equal(masterNode.gain.value, 1);
 
-  // System mute (tab blur / Poki commercial break) preserves user's manual mute state
+  // System mute (tab blur / hidden document) preserves user's manual mute state
   manager.setSystemMuted(true);
   assert.equal(manager.isSystemMuted(), true);
   assert.equal(manager.isMuted(), false);

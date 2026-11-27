@@ -1,25 +1,54 @@
-# Instalación de Dionaea Strike en una Web MERN (MongoDB + Express + React + Node)
+# Integración de Dionaea Strike en una Web React / MERN
 
-Dionaea Strike ya está auditado y empaquetado para integrarse sin fricción en cualquier aplicación **MERN** mediante dos opciones:
+Este repositorio está limpio y preparado para integrarse directamente dentro del código de tu sitio web (sin SDKs externos ni scripts de terceros).
 
 ---
 
-## Opción 1 (Recomendada): Integrarlo como componente React dentro de tu cliente MERN
+## Manifiesto de archivos requeridos
 
-### 1. Copiar archivos al frontend React (`client/`)
-Copia estas carpetas/archivos dentro de tu proyecto React:
-- `src/components/`, `src/game/`, `src/assets/`, `src/dionaea-embed.ts`, `src/dionaea-styles.css` → `client/src/games/dionaea-strike/`
-- `public/assets/audio/` y `public/assets/video/` (música `.m4a` y video intro `.webm`) → `client/public/assets/`
+Para integrar el juego como módulo React dentro del frontend de tu sitio (por ejemplo en `client/src/games/dionaea-strike/`):
 
-> **Nota:** No copies `src/index.css` a tu tienda. `dionaea-embed.ts` importa automáticamente `dionaea-styles.css`, que trae todas las animaciones (incluida la transición de la intro) sin modificar el scroll ni el fondo global de tu web.
+### 1. Código fuente y estilos (copiar a `client/src/games/dionaea-strike/`)
+- `src/components/` (todos los componentes React del juego)
+- `src/game/` (motor de simulación, renderizador Canvas 2D, audio Web Audio, dificultad, partículas, récords y transición de intro; podés omitir `*.test.ts` al copiar a producción)
+- `src/assets/images/` (los 7 fondos/ilustraciones `.jpg`, importados estáticamente por Vite/bundler)
+- `src/dionaea-embed.ts` (punto de entrada único con exports tipados)
+- `src/dionaea-styles.css` (estilos y keyframes encapsulados)
 
-Dependencias mínimas requeridas en `client/package.json`:
+> **Importante sobre CSS:** **No** copies `src/index.css` a tu tienda. `dionaea-embed.ts` importa automáticamente `dionaea-styles.css`, que solo aplica reglas scoped a `.dionaea-game-root` y keyframes de animación, sin tocar `html`, `body` ni el scroll global de tu página web. Todos los overlays (intro, título, HUD, pausa, récords) usan posicionamiento `absolute` dentro de `.dionaea-game-root`, por lo que respetan el tamaño del contenedor que le pases.
+
+### 2. Assets públicos estáticos (copiar a `client/public/assets/`)
+- `public/assets/audio/` (`menu-theme.m4a` y `level-1-pampa.m4a` … `level-5-boss.m4a`)
+- `public/assets/video/` (`intro.webm`)
+
+*(Si los copiás en una subcarpeta distinta, por ejemplo `client/public/dionaea/assets/`, simplemente pasá `assetBasePath="/dionaea"` al componente.)*
+
+### 3. Dependencias del frontend anfitrión
 ```bash
 npm install lucide-react
 ```
-*(El juego utiliza Tailwind CSS v4 y Canvas 2D nativo; no necesita motores externos pesados ni API keys.)*
+- **Framework:** React 19 (compatible con React 18+), TypeScript y Tailwind CSS v4.
+- **Sin API keys ni motores externos:** renderizado en Canvas 2D nativo y audio en Web Audio API.
+- **Fuentes opcionales (recomendadas):** `Outfit`, `Plus Jakarta Sans` y `JetBrains Mono` (si no se cargan, el juego degrada limpiamente a `system-ui`).
 
-### 2. Montar el componente en una ruta de React (ej. `/juego`)
+---
+
+## Props disponibles (`CarnivoraShmupGameProps`)
+
+| Prop | Tipo | Default | Uso |
+| --- | --- | --- | --- |
+| `assetBasePath` | `string` | `'.'` | Ruta base pública desde donde se sirven `assets/audio/*` y `assets/video/intro.webm` (ej. `'/'` o `'/juego'`). |
+| `className` | `string` | `'w-full h-dvh'` | Tamaño del contenedor cuando se embebe dentro de un layout (ej. `'w-full h-[calc(100dvh-64px)]'`). |
+| `skipIntro` | `boolean` | `false` | Si es `true`, omite el video introductorio y abre directo en la pantalla de título. |
+| `isAdmin` | `boolean` | `false` | Habilita el botón y modal de configuración avanzada (`AdminConfigModal`) solo para administradores. |
+| `initialConfig` | `GameConfig` | `undefined` | Configuración inicial opcional cargada desde tu API/MongoDB. |
+| `onConfigChange` | `(config: GameConfig) => void` | `undefined` | Callback al guardar cambios desde el panel de administrador (`PUT /api/game/config`). |
+| `onScoreSubmit` | `(result: GameSessionResult) => void` | `undefined` | Callback automático al terminar una partida (`POST /api/game/scores`). |
+
+---
+
+## Opción 1 (Recomendada): Montar como ruta React (`/juego`)
+
 ```tsx
 import { useEffect, useState } from 'react';
 import {
@@ -62,17 +91,19 @@ export function DionaeaPage({ currentUser }: { currentUser?: { role?: string; to
 
   return (
     <CarnivoraShmupGame
+      className="w-full h-[calc(100dvh-64px)]"
+      assetBasePath="/"
       isAdmin={currentUser?.role === 'admin'}
       initialConfig={serverConfig}
       onConfigChange={handleSaveAdminConfig}
       onScoreSubmit={handleScoreSubmit}
-      assetBasePath="/"
     />
   );
 }
 ```
 
-### 3. Endpoints Express + Modelos Mongoose (`server/`)
+### Endpoints Express + Modelo Mongoose (`server/`)
+
 ```js
 // server/models/GameScore.js
 import mongoose from 'mongoose';
@@ -87,6 +118,7 @@ const gameScoreSchema = new mongoose.Schema(
     victory: { type: Boolean, default: false },
     elapsedSec: { type: Number, default: 0 },
     enemiesDefeated: { type: Number, default: 0 },
+    damageTaken: { type: Number, default: 0 },
     petId: { type: String, enum: ['batricio', 'roy', 'sicario', 'palito', 'carpincho'], default: 'batricio' },
   },
   { timestamps: true }
@@ -102,15 +134,14 @@ import { GameScore } from '../models/GameScore.js';
 
 const router = express.Router();
 
-// Ranking Top 20
 router.get('/scores/top', async (_req, res) => {
   const scores = await GameScore.find().sort({ score: -1 }).limit(20).populate('userId', 'name');
   res.json({ scores });
 });
 
-// Guardar partida al terminar (onScoreSubmit)
 router.post('/scores', async (req, res) => {
-  const { score, highScore, maxCombo, levelReached, victory, elapsedSec, enemiesDefeated, petId } = req.body;
+  const { score, highScore, maxCombo, levelReached, victory, elapsedSec, enemiesDefeated, damageTaken, petId } =
+    req.body;
   const saved = await GameScore.create({
     userId: req.user?.id,
     score: Number(score) || 0,
@@ -120,6 +151,7 @@ router.post('/scores', async (req, res) => {
     victory: Boolean(victory),
     elapsedSec: Number(elapsedSec) || 0,
     enemiesDefeated: Number(enemiesDefeated) || 0,
+    damageTaken: Number(damageTaken) || 0,
     petId,
   });
   res.status(201).json(saved);
@@ -130,18 +162,17 @@ export default router;
 
 ---
 
-## Opción 2: Servir el build compilado (`dist/`) directamente desde Express
+## Opción 2: Servir el build compilado (`dist/`) desde tu mismo servidor Express
 
-1. Ejecuta `npm run build` en este proyecto. Todas las imágenes y scripts quedan empaquetados en `dist/` junto con las pistas de audio en `dist/assets/audio/` y el video en `dist/assets/video/`.
-2. Copia la carpeta `dist/` a tu backend Express (por ejemplo `server/public/dionaea/`) y móntala así:
+1. Ejecutá `npm run build` en este repositorio. Se genera `dist/` con rutas relativas (`base: './'`), todas las imágenes, scripts, audio (`dist/assets/audio/`) y video (`dist/assets/video/`).
+2. Copiá el contenido de `dist/` a `server/public/juego/` en tu backend Express y servilo así:
 
 ```js
 import path from 'path';
 import express from 'express';
 
-app.use('/juego', express.static(path.resolve('server/public/dionaea')));
+app.use('/juego', express.static(path.resolve('server/public/juego')));
 app.get('/juego/*', (_req, res) => {
-  res.sendFile(path.resolve('server/public/dionaea/index.html'));
+  res.sendFile(path.resolve('server/public/juego/index.html'));
 });
 ```
-*(Si montás bajo `/juego/`, compilá con `vite build --base=/juego/` o pasá `assetBasePath="/juego/"` en el componente.)*
