@@ -7,9 +7,11 @@ Dionaea Strike ya está auditado y empaquetado para integrarse sin fricción en 
 ## Opción 1 (Recomendada): Integrarlo como componente React dentro de tu cliente MERN
 
 ### 1. Copiar archivos al frontend React (`client/`)
-Copia estas carpetas en tu proyecto React:
-- `src/components/`, `src/game/`, `src/assets/images/`, `src/dionaea-embed.ts`, `src/index.css` → `client/src/games/dionaea-strike/`
+Copia estas carpetas/archivos dentro de tu proyecto React:
+- `src/components/`, `src/game/`, `src/assets/`, `src/dionaea-embed.ts`, `src/dionaea-styles.css` → `client/src/games/dionaea-strike/`
 - `public/assets/audio/` y `public/assets/video/` (música `.m4a` y video intro `.webm`) → `client/public/assets/`
+
+> **Nota:** No copies `src/index.css` a tu tienda. `dionaea-embed.ts` importa automáticamente `dionaea-styles.css`, que trae todas las animaciones (incluida la transición de la intro) sin modificar el scroll ni el fondo global de tu web.
 
 Dependencias mínimas requeridas en `client/package.json`:
 ```bash

@@ -799,6 +799,19 @@ class AnimeSoundEngine {
       this.playTone(f, f * 1.04, 0.36, 'triangle', 0.085, 0.12 + idx * 0.055);
     });
   }
+
+  public playIntroTransitionSfx() {
+    this.manager.playNoiseBurst({
+      duration: 0.34,
+      gainPeak: 0.09,
+      filterType: 'bandpass',
+      filterFreqStart: 360,
+      filterFreqEnd: 2400,
+      filterQ: 1.4,
+    });
+    this.playTone(392.0, 587.33, 0.18, 'triangle', 0.065, 0.08);
+    this.playTone(587.33, 880.0, 0.26, 'sine', 0.075, 0.24);
+  }
 }
 
 export const soundEngine = new AnimeSoundEngine();

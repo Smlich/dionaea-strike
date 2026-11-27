@@ -1,9 +1,12 @@
 /**
  * Punto de entrada listo para importar en cualquier frontend React (MERN / Vite / CRA).
+ * Incluye automáticamente los estilos propios del juego (`dionaea-styles.css`) sin pisar el CSS global de tu tienda.
  *
  * Ejemplo de uso en tu app MERN:
  *   import { CarnivoraShmupGame, type GameSessionResult } from './games/dionaea-strike/dionaea-embed';
  */
+import './dionaea-styles.css';
+
 export {
   CarnivoraShmupGame,
   DEFAULT_GAME_CONFIG,

@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
-    "test": "tsx --test src/game/fusionRules.test.ts src/game/highScoreStore.test.ts src/game/difficulty.test.ts src/game/screenShake.test.ts src/game/particles.test.ts src/game/levelTransition.test.ts src/game/soundManager.test.ts src/game/pokiSdk.test.ts src/game/performance.test.ts",
+    "test": "tsx --test src/game/fusionRules.test.ts src/game/highScoreStore.test.ts src/game/difficulty.test.ts src/game/screenShake.test.ts src/game/particles.test.ts src/game/levelTransition.test.ts src/game/soundManager.test.ts src/game/pokiSdk.test.ts src/game/performance.test.ts src/game/introTransition.test.ts",
     "package:poki": "node scripts/package-poki.mjs",
     "clean": "node -e \"const fs=require('fs'); fs.rmSync('dist',{recursive:true,force:true}); fs.rmSync('dev-dist',{recursive:true,force:true}); fs.rmSync('release',{recursive:true,force:true});\""
   },

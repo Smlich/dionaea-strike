@@ -342,6 +342,11 @@ export function CarnivoraShmupGame({
     soundEngine.syncMusicTempo(status === 'playing' && hud.bossActive, hud.bossPhase);
   }, [status, hud.bossActive, hud.bossPhase]);
 
+  const handleIntroTransitionStart = useCallback(() => {
+    soundEngine.unlockMusicOnGesture();
+    soundEngine.playIntroTransitionSfx();
+  }, []);
+
   const handleIntroRevealTitle = useCallback(() => {
     setTitleRevealFromIntro(true);
     setStatus((prev) => (prev === 'intro' ? 'title' : prev));
@@ -1093,7 +1098,7 @@ export function CarnivoraShmupGame({
           e.preventDefault();
         }
       }}
-      className="relative w-full h-dvh overflow-hidden select-none bg-[#08101C]"
+      className="dionaea-game-root relative w-full h-dvh overflow-hidden select-none bg-[#08101C]"
     >
       <canvas
         ref={canvasRef}
@@ -1189,6 +1194,7 @@ export function CarnivoraShmupGame({
           initialMuted={muted}
           volume={musicVolume}
           exitRequested={introExitRequested}
+          onTransitionStart={handleIntroTransitionStart}
           onRevealTitle={handleIntroRevealTitle}
           onComplete={handleIntroComplete}
         />
