@@ -95,6 +95,75 @@
   animation: comboPop 160ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+@keyframes introCurtainSweep {
+  0% {
+    transform: translate3d(-125%, 0, 0) skewX(-14deg);
+  }
+  38% {
+    transform: translate3d(-8%, 0, 0) skewX(-14deg);
+  }
+  52% {
+    transform: translate3d(-2%, 0, 0) skewX(-14deg);
+  }
+  100% {
+    transform: translate3d(125%, 0, 0) skewX(-14deg);
+  }
+}
+
+.animate-intro-curtain {
+  animation: introCurtainSweep 880ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  will-change: transform;
+}
+
+@keyframes introFlashPulse {
+  0% {
+    opacity: 0;
+  }
+  38% {
+    opacity: 0.42;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.animate-intro-flash {
+  animation: introFlashPulse 760ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: opacity;
+}
+
+@keyframes titleHeroReveal {
+  0% {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-title-hero-reveal {
+  animation: titleHeroReveal 680ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+@keyframes titleStageReveal {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 18px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.animate-title-stage-reveal {
+  animation: titleStageReveal 560ms cubic-bezier(0.16, 1, 0.3, 1) 90ms both;
+  will-change: transform, opacity;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

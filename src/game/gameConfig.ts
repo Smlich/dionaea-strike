@@ -1,3 +1,7 @@
+import {
+  loadGlobalHighScoreState,
+  syncLiveHighScore,
+} from './highScoreStore';
 import type {
   EnemyArchetypeId,
   GameConfig,
@@ -980,26 +984,9 @@ export function saveGameConfig(config: GameConfig): GameConfig {
 }
 
 export function loadHighScore(): number {
-  if (typeof window === 'undefined') return 0;
-  try {
-    const val = Number(window.localStorage.getItem(HIGHSCORE_STORAGE_KEY) || '0');
-    return Number.isFinite(val) && val > 0 ? Math.round(val) : 0;
-  } catch {
-    return 0;
-  }
+  return loadGlobalHighScoreState().bestScore;
 }
 
 export function saveHighScore(score: number): number {
-  const clean = Math.max(0, Math.round(score));
-  if (typeof window !== 'undefined') {
-    try {
-      const prev = loadHighScore();
-      const best = Math.max(prev, clean);
-      window.localStorage.setItem(HIGHSCORE_STORAGE_KEY, String(best));
-      return best;
-    } catch {
-      return clean;
-    }
-  }
-  return clean;
+  return syncLiveHighScore(score).bestScore;
 }

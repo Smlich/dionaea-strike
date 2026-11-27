@@ -9,6 +9,7 @@ import {
   Shield,
   SlidersHorizontal,
   Sparkles,
+  Trophy,
   Volume2,
   VolumeX,
   Zap,
@@ -35,10 +36,18 @@ import {
   sanitizeGameConfig,
   saveGameConfig,
 } from '../game/gameConfig';
+import {
+  GLOBAL_HIGHSCORE_STORAGE_KEY,
+  LEGACY_HIGHSCORE_STORAGE_KEY,
+  loadGlobalHighScoreState,
+  resetGlobalHighScoreState,
+} from '../game/highScoreStore';
 import { GameSimulation } from '../game/simulation';
-import type { GameConfig, GameStatus, HudSnapshot, PetId } from '../game/types';
+import type { GameConfig, GameStatus, GlobalHighScoreState, HudSnapshot, PetId } from '../game/types';
 import { AdminConfigModal } from './AdminConfigModal';
+import { CreatorIntroOverlay } from './CreatorIntroOverlay';
 import { GameHud } from './GameHud';
+import { HighScoreModal } from './HighScoreModal';
 import { PetEmblem, SpeciesEmblem, TitleLogoLockup } from './SpeciesIcons';
 import titleHeroBg from '../assets/images/hero_title_dionaea_biplane_1795699672875.jpg';
 
@@ -69,11 +78,14 @@ export interface CarnivoraShmupGameProps {
 
 function createInitialHud(cfg: GameConfig): HudSnapshot {
   const firstBoss = cfg.bosses[0];
+  const best = loadHighScore();
   return {
     hp: cfg.player.maxHp,
     maxHp: cfg.player.maxHp,
     score: 0,
-    highScore: loadHighScore(),
+    highScore: best,
+    previousHighScore: best,
+    isNewHighScore: false,
     combo: 0,
     maxCombo: 0,
     comboMultiplier: 1,
@@ -132,6 +144,15 @@ function createInitialHud(cfg: GameConfig): HudSnapshot {
   };
 }
 
+function getInitialStatus(): GameStatus {
+  if (typeof window === 'undefined') return 'title';
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('autostart') === '1' || params.get('skipIntro') === '1') {
+    return 'title';
+  }
+  return 'intro';
+}
+
 export function CarnivoraShmupGame({
   isAdmin = false,
   initialConfig,
@@ -140,8 +161,13 @@ export function CarnivoraShmupGame({
   assetBasePath = '/',
 }: CarnivoraShmupGameProps) {
   const [config, setConfig] = useState<GameConfig>(() => initialConfig ?? loadGameConfig());
-  const [status, setStatus] = useState<GameStatus>('title');
+  const [status, setStatus] = useState<GameStatus>(() => getInitialStatus());
+  const [introOverlayMounted, setIntroOverlayMounted] = useState<boolean>(() => getInitialStatus() === 'intro');
+  const [introExitRequested, setIntroExitRequested] = useState<boolean>(false);
+  const [titleRevealFromIntro, setTitleRevealFromIntro] = useState<boolean>(false);
   const [hud, setHud] = useState<HudSnapshot>(() => createInitialHud(config));
+  const [globalRecords, setGlobalRecords] = useState<GlobalHighScoreState>(() => loadGlobalHighScoreState());
+  const [showRecordsModal, setShowRecordsModal] = useState(false);
   const [muted, setMuted] = useState(false);
   const [musicVolume, setMusicVolume] = useState<number>(() => soundEngine.getMusicVolume());
   const [sfxVolume, setSfxVolume] = useState<number>(() => soundEngine.getSfxVolume());
@@ -153,15 +179,17 @@ export function CarnivoraShmupGame({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const simRef = useRef<GameSimulation | null>(null);
   const worldScaleRef = useRef<number>(1);
-  const statusRef = useRef<GameStatus>('title');
+  const statusRef = useRef<GameStatus>(status);
   const hudRef = useRef<HudSnapshot>(hud);
   const showAdminRef = useRef<boolean>(false);
+  const showRecordsRef = useRef<boolean>(false);
   const onScoreSubmitRef = useRef(onScoreSubmit);
   const submittedRunRef = useRef<boolean>(false);
 
   statusRef.current = status;
   hudRef.current = hud;
   showAdminRef.current = isAdmin && showAdmin;
+  showRecordsRef.current = showRecordsModal;
   onScoreSubmitRef.current = onScoreSubmit;
 
   useEffect(() => {
@@ -181,8 +209,11 @@ export function CarnivoraShmupGame({
 
     if (status === 'playing') {
       submittedRunRef.current = false;
+    } else if (status === 'title' || status === 'paused' || status === 'level_clear') {
+      setGlobalRecords(loadGlobalHighScoreState());
     } else if ((status === 'gameover' || status === 'victory') && !submittedRunRef.current) {
       submittedRunRef.current = true;
+      setGlobalRecords(loadGlobalHighScoreState());
       const latestHud = hudRef.current;
       onScoreSubmitRef.current?.({
         score: latestHud.score,
@@ -197,6 +228,18 @@ export function CarnivoraShmupGame({
       });
     }
   }, [status]);
+
+  // Keep global high scores synchronized across multiple browser tabs in real time
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === GLOBAL_HIGHSCORE_STORAGE_KEY || e.key === LEGACY_HIGHSCORE_STORAGE_KEY || e.key === null) {
+        setGlobalRecords(loadGlobalHighScoreState());
+        simRef.current?.refreshHighScore();
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   // If admin privileges drop, close any open admin modal immediately
   useEffect(() => {
@@ -213,12 +256,49 @@ export function CarnivoraShmupGame({
     soundEngine.syncMusicTempo(status === 'playing' && hud.bossActive, hud.bossPhase);
   }, [status, hud.bossActive, hud.bossPhase]);
 
+  const handleIntroRevealTitle = useCallback(() => {
+    setTitleRevealFromIntro(true);
+    setStatus((prev) => (prev === 'intro' ? 'title' : prev));
+    setGlobalRecords(loadGlobalHighScoreState());
+    soundEngine.unlockMusicOnGesture();
+  }, []);
+
+  const handleIntroComplete = useCallback(() => {
+    setIntroOverlayMounted(false);
+    setIntroExitRequested(false);
+    setStatus((prev) => (prev === 'intro' ? 'title' : prev));
+  }, []);
+
+  const handleResetRecords = useCallback(() => {
+    const cleared = resetGlobalHighScoreState();
+    setGlobalRecords(cleared);
+    simRef.current?.refreshHighScore();
+    setHud((prev) => ({
+      ...prev,
+      highScore: 0,
+      previousHighScore: 0,
+      isNewHighScore: false,
+    }));
+  }, []);
+
+  const handleReturnToTitle = useCallback(() => {
+    simRef.current?.finalizeRunRecord(false);
+    setGlobalRecords(loadGlobalHighScoreState());
+    setTitleRevealFromIntro(false);
+    simRef.current?.resetRunState();
+    simRef.current?.setStatus('title');
+  }, []);
+
   const handleStart = useCallback(() => {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
+    setIntroOverlayMounted(false);
+    setIntroExitRequested(false);
     setShowAdmin(false);
+    setShowRecordsModal(false);
     simRef.current?.startNewGame();
+    setGlobalRecords(loadGlobalHighScoreState());
     soundEngine.restartLevelMusic(1);
     canvasRef.current?.focus();
   }, []);
@@ -402,9 +482,15 @@ export function CarnivoraShmupGame({
 
       sim.setGamepadState(true, mapped.moveX, mapped.moveY, mapped.focusSlow);
 
-      if (showAdminRef.current) return;
+      if (showAdminRef.current || showRecordsRef.current) return;
 
       const cur = statusRef.current;
+      if (cur === 'intro') {
+        if (edges.confirmPressed || edges.pausePressed) {
+          setIntroExitRequested(true);
+        }
+        return;
+      }
       if (cur === 'playing') {
         if (edges.fireSecondaryPressed) {
           soundEngine.unlockMusicOnGesture();
@@ -496,6 +582,19 @@ export function CarnivoraShmupGame({
     const onKeyDown = (e: KeyboardEvent) => {
       if (showAdminRef.current) {
         if (e.code === 'Escape') setShowAdmin(false);
+        return;
+      }
+
+      if (showRecordsRef.current) {
+        if (e.code === 'Escape') setShowRecordsModal(false);
+        return;
+      }
+
+      if (statusRef.current === 'intro') {
+        if (e.code === 'Enter' || e.code === 'Space' || e.code === 'Escape') {
+          e.preventDefault();
+          setIntroExitRequested(true);
+        }
         return;
       }
 
@@ -654,6 +753,18 @@ export function CarnivoraShmupGame({
         className="block w-full h-full touch-none outline-none"
       />
 
+      {/* CREATOR INTRO VIDEO & CINEMATIC TRANSITION CURTAIN */}
+      {introOverlayMounted && (
+        <CreatorIntroOverlay
+          assetBasePath={assetBasePath}
+          initialMuted={muted}
+          volume={musicVolume}
+          exitRequested={introExitRequested}
+          onRevealTitle={handleIntroRevealTitle}
+          onComplete={handleIntroComplete}
+        />
+      )}
+
       {/* REWORKED TITLE SCREEN */}
       {status === 'title' && (
         <div className="fixed inset-0 z-30 overflow-y-auto overscroll-contain">
@@ -664,7 +775,9 @@ export function CarnivoraShmupGame({
                 alt="Biplano carnívoro Dionaea argentino y Sapo Batricio enfrentando artrópodos invasores"
                 referrerPolicy="no-referrer"
                 onError={() => setBgFailed(true)}
-                className="fixed inset-0 w-full h-full object-cover object-[70%_center] sm:object-[76%_center] lg:object-right pointer-events-none"
+                className={`fixed inset-0 w-full h-full object-cover object-[70%_center] sm:object-[76%_center] lg:object-right pointer-events-none ${
+                  titleRevealFromIntro ? 'animate-title-hero-reveal' : ''
+                }`}
               />
             ) : (
               <div
@@ -680,7 +793,11 @@ export function CarnivoraShmupGame({
             />
 
             {/* Top Utility Bar: Xbox Detection Banner + Audio Toggle */}
-            <div className="relative z-20 flex items-center justify-between gap-2 pt-[max(0.75rem,env(safe-area-inset-top))] px-[max(1rem,env(safe-area-inset-left))] sm:px-10 [@media(max-height:480px)]:pt-2">
+            <div
+              className={`relative z-20 flex items-center justify-between gap-2 pt-[max(0.75rem,env(safe-area-inset-top))] px-[max(1rem,env(safe-area-inset-left))] sm:px-10 [@media(max-height:480px)]:pt-2 ${
+                titleRevealFromIntro ? 'animate-title-stage-reveal' : ''
+              }`}
+            >
               <div className="flex items-center gap-2">
                 {isXbox && (
                   <div
@@ -773,7 +890,11 @@ export function CarnivoraShmupGame({
             </div>
 
             {/* Main Reworked Hero & Tactical Hangar Stage */}
-            <div className="relative z-10 w-full max-w-3xl pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] sm:px-10 lg:px-12 py-3 sm:py-4 [@media(max-height:480px)]:py-1.5 flex flex-col items-start gap-3 sm:gap-3.5 [@media(max-height:480px)]:gap-2">
+            <div
+              className={`relative z-10 w-full max-w-3xl pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] sm:px-10 lg:px-12 py-3 sm:py-4 [@media(max-height:480px)]:py-1.5 flex flex-col items-start gap-3 sm:gap-3.5 [@media(max-height:480px)]:gap-2 ${
+                titleRevealFromIntro ? 'animate-title-stage-reveal' : ''
+              }`}
+            >
               {/* New Main Logo Emblem + Title Lockup */}
               <div className="flex flex-col items-start gap-1.5">
                 <TitleLogoLockup title={config.gameTitle} />
@@ -781,6 +902,44 @@ export function CarnivoraShmupGame({
                   Defiende los cielos de la Tierra con tu biplano carnívoro junto a{' '}
                   <span className="font-extrabold text-amber-300">{selectedPetInfo.name}</span>, combina armas rotativas y derrota a los jefes al ritmo de cada nivel.
                 </p>
+
+                {/* Global High Score Summary Line (Unboxed, Zero-Pill, Tabular) */}
+                <div
+                  data-testid="title-global-highscore"
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-0.5 text-xs text-slate-200"
+                >
+                  <div className="inline-flex items-baseline gap-1.5">
+                    <Trophy className="w-3.5 h-3.5 text-amber-400 self-center shrink-0" />
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+                      Récord Global
+                    </span>
+                    <span
+                      data-testid="title-best-score-value"
+                      className="text-base sm:text-lg font-display font-black tabular-nums text-white"
+                    >
+                      {globalRecords.bestScore.toLocaleString('es-ES')}
+                    </span>
+                  </div>
+                  {globalRecords.bestScore > 0 && (
+                    <span className="text-[11px] text-slate-300 tabular-nums">
+                      Combo Máx. {globalRecords.bestCombo} · Niv. {globalRecords.highestLevel}/5
+                      {globalRecords.totalVictories > 0
+                        ? ` · ${globalRecords.totalVictories} ${globalRecords.totalVictories === 1 ? 'victoria' : 'victorias'}`
+                        : ''}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    data-testid="open-records-btn"
+                    onClick={() => {
+                      setGlobalRecords(loadGlobalHighScoreState());
+                      setShowRecordsModal(true);
+                    }}
+                    className="touch-manipulation text-xs font-semibold text-sky-300 hover:text-sky-200 underline underline-offset-4 decoration-sky-400/60 hover:decoration-sky-300 cursor-pointer whitespace-nowrap"
+                  >
+                    Ver Récords
+                  </button>
+                </div>
               </div>
 
               {/* Reworked Co-Pilot Pet Hangar Deck */}
@@ -1087,16 +1246,22 @@ export function CarnivoraShmupGame({
               </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-2.5 text-left">
+            <div className="grid grid-cols-3 gap-2 text-left">
               <div className="p-2.5 sm:p-3 rounded-xl bg-slate-900 border border-slate-800">
                 <div className="text-[10px] uppercase text-slate-400 font-semibold">Puntuación</div>
-                <div className="text-lg font-display font-extrabold tabular-nums text-white">
+                <div className="text-base sm:text-lg font-display font-extrabold tabular-nums text-white">
                   {hud.score.toLocaleString('es-ES')}
                 </div>
               </div>
               <div className="p-2.5 sm:p-3 rounded-xl bg-slate-900 border border-slate-800">
+                <div className="text-[10px] uppercase text-slate-400 font-semibold">Récord</div>
+                <div className="text-base sm:text-lg font-display font-extrabold tabular-nums text-amber-400">
+                  {hud.highScore.toLocaleString('es-ES')}
+                </div>
+              </div>
+              <div className="p-2.5 sm:p-3 rounded-xl bg-slate-900 border border-slate-800">
                 <div className="text-[10px] uppercase text-slate-400 font-semibold">Combo Máx.</div>
-                <div className="text-lg font-display font-extrabold tabular-nums text-cyan-400">
+                <div className="text-base sm:text-lg font-display font-extrabold tabular-nums text-cyan-400">
                   {hud.maxCombo}
                 </div>
               </div>
@@ -1170,10 +1335,7 @@ export function CarnivoraShmupGame({
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  simRef.current?.resetRunState();
-                  simRef.current?.setStatus('title');
-                }}
+                onClick={handleReturnToTitle}
                 className="touch-manipulation w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 font-semibold text-xs border border-slate-700 cursor-pointer"
               >
                 Volver al Menú
@@ -1196,17 +1358,23 @@ export function CarnivoraShmupGame({
               Misión en Pausa
             </h2>
 
-            <div className="grid grid-cols-2 gap-3 text-left">
-              <div className="p-2.5 sm:p-3 rounded-xl bg-slate-900 border border-slate-800">
-                <div className="text-[11px] uppercase text-slate-400 font-semibold">Puntuación</div>
-                <div className="text-lg sm:text-xl font-display font-extrabold tabular-nums text-white">
+            <div className="grid grid-cols-3 gap-2 text-left">
+              <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                <div className="text-[10px] uppercase text-slate-400 font-semibold">Puntos</div>
+                <div className="text-base sm:text-lg font-display font-extrabold tabular-nums text-white">
                   {hud.score.toLocaleString('es-ES')}
                 </div>
               </div>
-              <div className="p-2.5 sm:p-3 rounded-xl bg-slate-900 border border-slate-800">
-                <div className="text-[11px] uppercase text-slate-400 font-semibold">Mutaciones</div>
-                <div className="text-lg sm:text-xl font-display font-extrabold tabular-nums text-emerald-400">
-                  {hud.secretEvolution ? 'SECRETA N5' : `${activeMutationsCount}/${hud.maxSlots}`}
+              <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                <div className="text-[10px] uppercase text-slate-400 font-semibold">Récord</div>
+                <div className="text-base sm:text-lg font-display font-extrabold tabular-nums text-amber-400">
+                  {hud.highScore.toLocaleString('es-ES')}
+                </div>
+              </div>
+              <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                <div className="text-[10px] uppercase text-slate-400 font-semibold">Mutac.</div>
+                <div className="text-base sm:text-lg font-display font-extrabold tabular-nums text-emerald-400">
+                  {hud.secretEvolution ? 'S5' : `${activeMutationsCount}/${hud.maxSlots}`}
                 </div>
               </div>
             </div>
@@ -1287,10 +1455,7 @@ export function CarnivoraShmupGame({
               )}
               <button
                 type="button"
-                onClick={() => {
-                  simRef.current?.resetRunState();
-                  simRef.current?.setStatus('title');
-                }}
+                onClick={handleReturnToTitle}
                 className="touch-manipulation w-full py-2 text-xs font-medium text-slate-400 hover:text-white cursor-pointer"
               >
                 Volver al Título
@@ -1320,6 +1485,15 @@ export function CarnivoraShmupGame({
               <h2 className="text-2xl sm:text-3xl font-display font-black text-white mt-1">
                 {status === 'victory' ? '¡Invasión Neutralizada!' : 'Misión Fallida'}
               </h2>
+              {hud.isNewHighScore && hud.score > 0 && (
+                <div
+                  data-testid="gameover-new-record"
+                  className="mt-1.5 inline-flex items-center gap-1.5 text-xs font-display font-black tracking-wide text-amber-300"
+                >
+                  <Trophy className="w-3.5 h-3.5 text-amber-400" />
+                  <span>¡NUEVO RÉCORD GLOBAL GUARDADO!</span>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5 text-left">
@@ -1329,7 +1503,11 @@ export function CarnivoraShmupGame({
                   {hud.score.toLocaleString('es-ES')}
                 </div>
               </div>
-              <div className="p-2.5 sm:p-3 rounded-xl bg-slate-900 border border-slate-800">
+              <div
+                className={`p-2.5 sm:p-3 rounded-xl bg-slate-900 border ${
+                  hud.isNewHighScore && hud.score > 0 ? 'border-amber-400/70' : 'border-slate-800'
+                }`}
+              >
                 <div className="text-[10px] uppercase text-slate-400 font-semibold">Récord</div>
                 <div className="text-base sm:text-lg font-display font-extrabold tabular-nums text-amber-400">
                   {hud.highScore.toLocaleString('es-ES')}
@@ -1366,22 +1544,30 @@ export function CarnivoraShmupGame({
                 <span>Jugar de Nuevo</span>
               </button>
               <div className="flex gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGlobalRecords(loadGlobalHighScoreState());
+                    setShowRecordsModal(true);
+                  }}
+                  className="touch-manipulation flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 font-semibold text-xs border border-slate-700 inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+                >
+                  <Trophy className="w-3.5 h-3.5" />
+                  <span>Ver Récords</span>
+                </button>
                 {isAdmin && (
                   <button
                     type="button"
                     onClick={() => setShowAdmin(true)}
-                    className="touch-manipulation flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 font-semibold text-xs border border-slate-700 cursor-pointer"
+                    className="touch-manipulation flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 font-semibold text-xs border border-slate-700 cursor-pointer whitespace-nowrap"
                   >
                     Administrar
                   </button>
                 )}
                 <button
                   type="button"
-                  onClick={() => {
-                    simRef.current?.resetRunState();
-                    simRef.current?.setStatus('title');
-                  }}
-                  className="touch-manipulation flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 font-semibold text-xs border border-slate-700 cursor-pointer"
+                  onClick={handleReturnToTitle}
+                  className="touch-manipulation flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 font-semibold text-xs border border-slate-700 cursor-pointer whitespace-nowrap"
                 >
                   Menú Principal
                 </button>
@@ -1389,6 +1575,15 @@ export function CarnivoraShmupGame({
             </div>
           </div>
         </div>
+      )}
+
+      {/* GLOBAL HIGH SCORES / RECORDS MODAL */}
+      {showRecordsModal && (
+        <HighScoreModal
+          records={globalRecords}
+          onResetRecords={handleResetRecords}
+          onClose={() => setShowRecordsModal(false)}
+        />
       )}
 
       {/* ADMIN / CUSTOMIZATION PANEL — Strictly gated behind isAdmin */}

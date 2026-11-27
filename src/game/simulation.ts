@@ -35,11 +35,11 @@ import {
   loadSelectedPet,
   loadUnlockedPets,
   loadUnlockedSpecies,
-  saveHighScore,
   saveSelectedPet,
   unlockPetForNextRuns,
   unlockSpeciesForNextRuns,
 } from './gameConfig';
+import { recordRunPerformance, syncLiveHighScore } from './highScoreStore';
 import {
   renderGameFrame,
   type AcidPool,
@@ -155,6 +155,11 @@ export class GameSimulation {
   private spawnTimer = 0;
   private score = 0;
   private highScore = 0;
+  private sessionStartBestScore = 0;
+  private isNewHighScore = false;
+  private newRecordAnnounced = false;
+  private runRecorded = false;
+  private lastPersistedLiveScore = 0;
   private combo = 0;
   private maxCombo = 0;
   private comboTimer = 0;
@@ -243,6 +248,8 @@ export class GameSimulation {
     this.onHudUpdate = onHudUpdate;
     this.onStatusChange = onStatusChange;
     this.highScore = loadHighScore();
+    this.sessionStartBestScore = this.highScore;
+    this.lastPersistedLiveScore = this.highScore;
 
     this.playerBullets = Array.from({ length: PLAYER_BULLET_POOL_SIZE }, () => ({
       active: false,
@@ -381,6 +388,9 @@ export class GameSimulation {
   }
 
   public startNewGame() {
+    if ((this.status === 'playing' || this.status === 'paused' || this.status === 'level_clear') && this.score > 0 && !this.runRecorded) {
+      this.finalizeRunRecord(false);
+    }
     this.resetRunState();
     this.status = 'playing';
     this.onStatusChange('playing');
@@ -391,6 +401,66 @@ export class GameSimulation {
     this.status = next;
     this.onStatusChange(next);
     this.emitHud();
+  }
+
+  public refreshHighScore() {
+    const latest = loadHighScore();
+    this.highScore = latest;
+    this.lastPersistedLiveScore = latest;
+    if (this.status !== 'playing') {
+      this.sessionStartBestScore = latest;
+      this.isNewHighScore = false;
+      this.newRecordAnnounced = false;
+    }
+    this.emitHud();
+  }
+
+  private checkLiveHighScoreProgress() {
+    const rounded = Math.round(this.score);
+    if (rounded > this.highScore) {
+      this.highScore = rounded;
+      this.isNewHighScore = true;
+      if (this.sessionStartBestScore > 0 && !this.newRecordAnnounced) {
+        this.newRecordAnnounced = true;
+        soundEngine.playUiSfxPreview();
+        this.callouts.push({
+          x: this.playerX + 12,
+          y: Math.max(48, this.playerY - 46),
+          vy: -42,
+          text: '¡NUEVO RÉCORD!',
+          color: '#FACC15',
+          life: 1.6,
+          maxLife: 1.6,
+        });
+      }
+      if (rounded > this.lastPersistedLiveScore) {
+        const res = syncLiveHighScore(rounded, this.maxCombo, this.levelIndex);
+        this.highScore = res.bestScore;
+        this.lastPersistedLiveScore = res.bestScore;
+      }
+    }
+  }
+
+  public finalizeRunRecord(victory: boolean) {
+    if (this.runRecorded) return;
+    this.runRecorded = true;
+    const rounded = Math.round(this.score);
+    if (rounded > 0 || victory) {
+      const outcome = recordRunPerformance({
+        score: rounded,
+        maxCombo: this.maxCombo,
+        levelReached: this.levelIndex,
+        victory,
+        petId: this.selectedPet,
+        enemiesDefeated: this.enemiesDefeated,
+        elapsedSec: Math.round(this.elapsedSec),
+      });
+      this.highScore = outcome.state.bestScore;
+      this.lastPersistedLiveScore = outcome.state.bestScore;
+      if (rounded > this.sessionStartBestScore && rounded > 0) {
+        this.isNewHighScore = true;
+      }
+    }
   }
 
   public setSelectedPet(petId: PetId) {
@@ -503,6 +573,12 @@ export class GameSimulation {
     this.lastBossBeatIndex = -1;
     this.windForceX = 0;
     this.score = 0;
+    this.highScore = loadHighScore();
+    this.sessionStartBestScore = this.highScore;
+    this.lastPersistedLiveScore = this.highScore;
+    this.isNewHighScore = false;
+    this.newRecordAnnounced = false;
+    this.runRecorded = false;
     this.combo = 0;
     this.maxCombo = 0;
     this.comboTimer = 0;
@@ -950,7 +1026,7 @@ export class GameSimulation {
       this.defeatBeatTimer -= dt;
       this.updateParticles(dt);
       if (this.defeatBeatTimer <= 0) {
-        this.highScore = saveHighScore(this.score);
+        this.finalizeRunRecord(false);
         this.setStatus('gameover');
       }
       return;
@@ -2869,11 +2945,13 @@ export class GameSimulation {
 
             this.levelIndex = nextLevel;
             this.miniBossDefeatedForLevel = false;
+            this.checkLiveHighScoreProgress();
+            syncLiveHighScore(Math.round(this.score), this.maxCombo, this.levelIndex);
             this.clearInputs();
             soundEngine.playFusionFanfare();
             this.setStatus('level_clear');
           } else {
-            this.highScore = saveHighScore(this.score);
+            this.finalizeRunRecord(true);
             soundEngine.playVictory();
             this.setStatus('victory');
           }
@@ -3323,6 +3401,7 @@ export class GameSimulation {
       Math.min(1, 1 - this.secondaryCooldown / Math.max(0.1, this.secondaryMaxCooldown || secMeta.cooldownSec))
     );
 
+    this.checkLiveHighScoreProgress();
     const rankInfo = getComboRank(this.combo);
 
     this.onHudUpdate({
@@ -3330,6 +3409,8 @@ export class GameSimulation {
       maxHp: this.maxHp,
       score: Math.round(this.score),
       highScore: Math.max(this.highScore, Math.round(this.score)),
+      previousHighScore: this.sessionStartBestScore,
+      isNewHighScore: this.isNewHighScore,
       combo: this.combo,
       maxCombo: this.maxCombo,
       comboMultiplier: getComboMultiplier(this.combo),

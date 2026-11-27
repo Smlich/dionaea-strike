@@ -269,7 +269,11 @@ export function GameHud({
           {/* Top-Right Cluster: Compact Level/Score + Controls + Slim Combo */}
           <div className="flex flex-col items-end gap-1 sm:gap-1.5 shrink-0">
             <div className="flex items-center gap-1.5 sm:gap-2">
-              <div className="flex flex-col items-end px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg bg-[#0B1422]/86 border border-[#090D16] shadow-[0_2px_0_#090D16]">
+              <div
+                className={`flex flex-col items-end px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg bg-[#0B1422]/86 border shadow-[0_2px_0_#090D16] ${
+                  hud.isNewHighScore ? 'border-amber-400/80' : 'border-[#090D16]'
+                }`}
+              >
                 <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-400 whitespace-nowrap leading-tight">
                   {hud.bossActive
                     ? hud.isMiniBoss
@@ -282,6 +286,17 @@ export function GameHud({
                   className="text-sm sm:text-lg font-display font-black tabular-nums leading-none text-white"
                 >
                   {hud.score.toLocaleString('es-ES')}
+                </span>
+                <span
+                  data-testid="hud-high-score"
+                  aria-label={`Récord global ${hud.highScore}`}
+                  className={`text-[9px] font-mono font-bold tabular-nums leading-tight whitespace-nowrap ${
+                    hud.isNewHighScore ? 'text-amber-300' : 'text-slate-300/90'
+                  }`}
+                >
+                  {hud.isNewHighScore
+                    ? `★ RÉCORD ${hud.highScore.toLocaleString('es-ES')}`
+                    : `RÉCORD ${hud.highScore.toLocaleString('es-ES')}`}
                 </span>
               </div>
 

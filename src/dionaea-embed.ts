@@ -17,9 +17,18 @@ export {
   loadGameConfig,
   saveGameConfig,
 } from './game/gameConfig';
+export {
+  GLOBAL_HIGHSCORE_STORAGE_KEY,
+  loadGlobalHighScoreState,
+  recordRunPerformance,
+  resetGlobalHighScoreState,
+  syncLiveHighScore,
+} from './game/highScoreStore';
 export type {
   GameConfig,
   GameStatus,
+  GlobalHighScoreState,
+  HighScoreRunEntry,
   HudSnapshot,
   LevelNumber,
   PetCatalogItem,

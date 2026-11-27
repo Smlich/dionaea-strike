@@ -1,4 +1,4 @@
-export type GameStatus = 'title' | 'playing' | 'paused' | 'level_clear' | 'victory' | 'gameover';
+export type GameStatus = 'intro' | 'title' | 'playing' | 'paused' | 'level_clear' | 'victory' | 'gameover';
 
 export type PetId = 'batricio' | 'roy' | 'sicario' | 'palito' | 'carpincho';
 
@@ -254,11 +254,36 @@ export interface ClearedLevelSummary {
   unlockedPetName?: string;
 }
 
+export interface HighScoreRunEntry {
+  id: string;
+  score: number;
+  maxCombo: number;
+  levelReached: LevelNumber;
+  victory: boolean;
+  petId: PetId;
+  enemiesDefeated: number;
+  elapsedSec: number;
+  achievedAt: string;
+}
+
+export interface GlobalHighScoreState {
+  bestScore: number;
+  bestCombo: number;
+  highestLevel: LevelNumber;
+  totalVictories: number;
+  totalRuns: number;
+  bestRun: HighScoreRunEntry | null;
+  topRuns: HighScoreRunEntry[];
+  updatedAt: string | null;
+}
+
 export interface HudSnapshot {
   hp: number;
   maxHp: number;
   score: number;
   highScore: number;
+  previousHighScore: number;
+  isNewHighScore: boolean;
   combo: number;
   maxCombo: number;
   comboMultiplier: number;

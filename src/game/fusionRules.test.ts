@@ -333,6 +333,7 @@ test('sanitizeGameConfig handles 5 levels, 15 full-song waves, Earth landscapes,
 });
 
 test('all menu and 5 level music tracks resolve appropriately', () => {
+  assert.equal(getMusicTrackForState('intro', 1), null);
   assert.equal(getMusicTrackForState('title', 1), MENU_MUSIC_SRC);
   assert.equal(getMusicTrackForState('gameover', 1), null);
   assert.equal(getMusicTrackForState('victory', 1), null);
@@ -341,6 +342,8 @@ test('all menu and 5 level music tracks resolve appropriately', () => {
   assert.equal(getMusicTrackForState('playing', 2), LEVEL_2_MUSIC_SRC);
   assert.equal(getMusicTrackForState('playing', 3), LEVEL_3_MUSIC_SRC);
   assert.equal(getMusicTrackForState('playing', 4), LEVEL_4_MUSIC_SRC);
+  assert.equal(LEVEL_4_MUSIC_SRC, '/assets/aistudio/Dionaea_Strike_-_level_4_1399cdc6.m4a');
+  assert.notEqual(LEVEL_4_MUSIC_SRC, LEVEL_1_MUSIC_SRC);
   assert.equal(getMusicTrackForState('playing', 5), LEVEL_5_MUSIC_SRC);
 });
 

@@ -6,7 +6,7 @@ export const MENU_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Men___Voz_AR__8
 export const LEVEL_1_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Rap_AR__Voz_Argentina__5bdef878.m4a';
 export const LEVEL_2_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Nivel_2_Cumbia__Voz_AR__3aaf9dca.m4a';
 export const LEVEL_3_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Nivel_3_Boom_Bap__Voz_AR__7c61e348.m4a';
-export const LEVEL_4_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Rap_AR__Voz_Argentina__5bdef878.m4a';
+export const LEVEL_4_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_level_4_1399cdc6.m4a';
 export const LEVEL_5_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Nivel_5_Boss__Voz_AR__2a892b6f.m4a';
 
 export const LEVEL_MUSIC_TRACKS: Record<LevelNumber, string> = {
@@ -32,7 +32,7 @@ export const LEVEL_RHYTHM_PROFILES: Record<LevelNumber, LevelRhythmProfile> = {
   1: { bpm: 140, firstDropSec: 0.12, beatsPerSpawn: 2.0, trackDurationSec: 164.0 },
   2: { bpm: 99, firstDropSec: 0.2, beatsPerSpawn: 1.5, trackDurationSec: 159.1 },
   3: { bpm: 118, firstDropSec: 1.82, beatsPerSpawn: 1.5, trackDurationSec: 180.2 },
-  4: { bpm: 140, firstDropSec: 0.12, beatsPerSpawn: 1.5, trackDurationSec: 164.0 },
+  4: { bpm: 130, firstDropSec: 3.2, beatsPerSpawn: 1.5, trackDurationSec: 179.1 },
   5: { bpm: 118, firstDropSec: 2.02, beatsPerSpawn: 1.0, trackDurationSec: 151.1 },
 };
 
