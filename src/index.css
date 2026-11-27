@@ -21,6 +21,7 @@
     background-color: #0e1a29;
     color: #f8fafc;
     -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
     user-select: none;
   }
 
@@ -162,6 +163,24 @@
 .animate-title-stage-reveal {
   animation: titleStageReveal 560ms cubic-bezier(0.16, 1, 0.3, 1) 90ms both;
   will-change: transform, opacity;
+}
+
+@keyframes rotatePhoneHint {
+  0%,
+  20% {
+    transform: rotate(0deg);
+  }
+  55%,
+  85% {
+    transform: rotate(-90deg);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+.animate-rotate-phone {
+  animation: rotatePhoneHint 2.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

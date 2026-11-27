@@ -36,6 +36,7 @@ import {
   computeInvasionState,
   computeLevelEnemyStats,
   computeLogicalViewport,
+  computeRelativeTouchTarget,
   getAllowedMutagenSpecies,
   getComboMultiplier,
   getComboRank,
@@ -46,6 +47,7 @@ import {
   pickFrogTongueTarget,
   resolveAbilitySlots,
   SECONDARY_ABILITY_META,
+  shouldRequireLandscape,
   stepEnemyBehavior,
   stepFrogAllyPosition,
   swapAbilitySlots,
@@ -724,6 +726,24 @@ test('gamepad input mapping handles stick deadzone, D-pad override, buttons, and
   assert.equal(held.fireSecondaryPressed, false, 'Holding button does not re-trigger rising edge');
   assert.equal(held.swapAbilityPressed, false);
 });
+
+test('shouldRequireLandscape enforces landscape on portrait phones/tablets and relative touch drag tracks deltas cleanly', () => {
+  assert.equal(shouldRequireLandscape(390, 844, true), true);
+  assert.equal(shouldRequireLandscape(390, 844, false), true);
+  assert.equal(shouldRequireLandscape(844, 390, true), false);
+  assert.equal(shouldRequireLandscape(768, 1024, true), true);
+  assert.equal(shouldRequireLandscape(1024, 768, true), false);
+  assert.equal(shouldRequireLandscape(1280, 720, false), false);
+  assert.equal(shouldRequireLandscape(800, 900, false), false);
+
+  const samePos = computeRelativeTouchTarget(160, 360, 220, 400, 220, 400, 1.15);
+  assert.deepEqual(samePos, { x: 160, y: 360 });
+
+  const moved = computeRelativeTouchTarget(160, 360, 200, 400, 300, 340, 1.2);
+  assert.equal(Math.round(moved.x), 280);
+  assert.equal(Math.round(moved.y), 288);
+});
+
 
 
 

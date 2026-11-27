@@ -21,7 +21,7 @@ export default defineConfig(() => {
           theme_color: '#08101C',
           background_color: '#08101C',
           display: 'standalone',
-          orientation: 'any',
+          orientation: 'landscape',
           start_url: '/',
           scope: '/',
           icons: [

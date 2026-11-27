@@ -2486,4 +2486,42 @@ export function getControlPrompts(gamepadConnected: boolean): ControlPromptSet {
   };
 }
 
+/**
+ * Determina si debe mostrarse el bloqueo obligatorio pidiendo girar el dispositivo a horizontal.
+ * Se activa en móviles/tablets en orientación vertical, pero nunca en escritorios anchos.
+ */
+export function shouldRequireLandscape(
+  cssWidth: number,
+  cssHeight: number,
+  isTouchDevice: boolean
+): boolean {
+  const w = Math.max(1, cssWidth);
+  const h = Math.max(1, cssHeight);
+  if (h <= w) return false;
+  if (isTouchDevice) {
+    return Math.min(w, h) <= 1024;
+  }
+  return w <= 640;
+}
+
+/**
+ * Calcula la posición objetivo del biplano usando arrastre táctil relativo al punto de apoyo del dedo,
+ * evitando que el dedo tape la nave en pantallas móviles.
+ */
+export function computeRelativeTouchTarget(
+  anchorPlayerX: number,
+  anchorPlayerY: number,
+  anchorPointerX: number,
+  anchorPointerY: number,
+  currentPointerX: number,
+  currentPointerY: number,
+  sensitivity = 1.15
+): { x: number; y: number } {
+  return {
+    x: anchorPlayerX + (currentPointerX - anchorPointerX) * sensitivity,
+    y: anchorPlayerY + (currentPointerY - anchorPointerY) * sensitivity,
+  };
+}
+
+
 

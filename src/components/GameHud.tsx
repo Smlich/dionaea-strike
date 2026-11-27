@@ -1,4 +1,18 @@
-import { AlertTriangle, ArrowLeftRight, Crosshair, Flame, Gamepad2, Pause, RotateCcw, Volume2, VolumeX, Zap } from 'lucide-react';
+import { useRef, type PointerEvent as ReactPointerEvent } from 'react';
+import {
+  AlertTriangle,
+  ArrowLeftRight,
+  Crosshair,
+  Flame,
+  Gamepad2,
+  Maximize2,
+  Minimize2,
+  Pause,
+  RotateCcw,
+  Volume2,
+  VolumeX,
+  Zap,
+} from 'lucide-react';
 import { getComboRank, getControlPrompts } from '../game/fusionRules';
 import { ALL_SPECIES_IDS, PET_CATALOG } from '../game/gameConfig';
 import type { GameConfig, HudSnapshot, PetId } from '../game/types';
@@ -8,6 +22,10 @@ interface GameHudProps {
   hud: HudSnapshot;
   config: GameConfig;
   muted: boolean;
+  isTouchDevice?: boolean;
+  isFullscreen?: boolean;
+  canFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
   onToggleMute: () => void;
   onPause: () => void;
   onRestart: () => void;
@@ -73,6 +91,10 @@ export function GameHud({
   hud,
   config,
   muted,
+  isTouchDevice = false,
+  isFullscreen = false,
+  canFullscreen = false,
+  onToggleFullscreen,
   onToggleMute,
   onPause,
   onRestart,
@@ -80,6 +102,7 @@ export function GameHud({
   onFireSecondary,
   onSwapAbilities,
 }: GameHudProps) {
+  const lastPointerTypeRef = useRef<string>('');
   const isCriticalHp = hud.hp <= 1;
   const specialReady = hud.specialCharge >= 0.999;
   const secondaryReady = hud.secondaryCharge >= 0.999;
@@ -91,6 +114,31 @@ export function GameHud({
   const prompts = getControlPrompts(hud.gamepadConnected);
   const isXbox = prompts.mode === 'xbox';
   const specialOngoing = Boolean(hud.activeSpecialLabel && hud.activeSpecialRemainingSec > 0.05);
+  const showTouchThumbDock = isTouchDevice && !isXbox;
+
+  const makeButtonHandlers = (action: () => void, disabled = false) => ({
+    onPointerDown: (e: ReactPointerEvent<HTMLButtonElement>) => {
+      lastPointerTypeRef.current = e.pointerType;
+      if (e.pointerType !== 'touch') return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (!disabled) {
+        e.currentTarget.blur();
+        action();
+      }
+    },
+    onClick: (e: React.MouseEvent<HTMLButtonElement>) => {
+      if (lastPointerTypeRef.current === 'touch' && e.detail !== 0) {
+        lastPointerTypeRef.current = '';
+        return;
+      }
+      lastPointerTypeRef.current = '';
+      if (!disabled) {
+        e.currentTarget.blur();
+        action();
+      }
+    },
+  });
 
   return (
     <div className="fixed inset-0 pointer-events-none select-none z-20 flex flex-col justify-between pt-[max(0.5rem,env(safe-area-inset-top))] pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.5rem,env(safe-area-inset-left))] pr-[max(0.5rem,env(safe-area-inset-right))] sm:p-3">
@@ -179,58 +227,57 @@ export function GameHud({
             </div>
 
             <div className="flex flex-wrap items-center gap-1 sm:gap-1.5">
-              {/* Touch, Keyboard & Xbox Special Trigger Button */}
-              <button
-                type="button"
-                tabIndex={-1}
-                onClick={(e) => {
-                  e.currentTarget.blur();
-                  onTriggerSpecial();
-                }}
-                disabled={!specialReady && !specialOngoing}
-                data-testid="pet-special-btn"
-                aria-label={`Activar ${petInfo.specialName} con ${prompts.specialFull}`}
-                title={`${petInfo.name} — ${petInfo.specialName} [${prompts.specialFull}]: ${petInfo.specialDesc}`}
-                className={`pointer-events-auto touch-manipulation relative overflow-hidden inline-flex items-center gap-1.5 min-h-[30px] sm:min-h-[28px] px-2.5 py-1 rounded-lg border border-[#090D16] shadow-[0_2px_0_#090D16] text-[11px] font-bold whitespace-nowrap active:translate-y-0.5 cursor-pointer ${
-                  specialOngoing
-                    ? petTheme.activeClass
-                    : specialReady
-                    ? petTheme.readyClass
-                    : 'bg-[#0B1422]/86 text-slate-400 cursor-not-allowed'
-                }`}
-              >
-                <span
-                  aria-hidden="true"
-                  className={`absolute inset-0 origin-left ${petTheme.chargeBg}`}
-                  style={{ transform: `scaleX(${hud.specialCharge})` }}
-                />
-                <span className="relative z-10 inline-flex items-center">
-                  {hud.petId ? <PetEmblem petId={hud.petId} size={15} /> : <Zap className="w-3 h-3" />}
-                </span>
-                <span className="relative z-10 sm:hidden">
-                  {specialOngoing
-                    ? `${hud.activeSpecialLabel} ${hud.activeSpecialRemainingSec.toFixed(1)}s`
-                    : petTheme.shortLabel}
-                </span>
-                <span className="relative z-10 hidden sm:inline-flex items-center gap-1">
-                  <span>
+              {/* Touch, Keyboard & Xbox Special Trigger Button (moved to right thumb dock on touch devices) */}
+              {!showTouchThumbDock && (
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  {...makeButtonHandlers(onTriggerSpecial, !specialReady && !specialOngoing)}
+                  disabled={!specialReady && !specialOngoing}
+                  data-testid="pet-special-btn"
+                  aria-label={`Activar ${petInfo.specialName} con ${prompts.specialFull}`}
+                  title={`${petInfo.name} — ${petInfo.specialName} [${prompts.specialFull}]: ${petInfo.specialDesc}`}
+                  className={`pointer-events-auto touch-manipulation relative overflow-hidden inline-flex items-center gap-1.5 min-h-[30px] sm:min-h-[28px] px-2.5 py-1 rounded-lg border border-[#090D16] shadow-[0_2px_0_#090D16] text-[11px] font-bold whitespace-nowrap active:translate-y-0.5 cursor-pointer ${
+                    specialOngoing
+                      ? petTheme.activeClass
+                      : specialReady
+                      ? petTheme.readyClass
+                      : 'bg-[#0B1422]/86 text-slate-400 cursor-not-allowed'
+                  }`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`absolute inset-0 origin-left ${petTheme.chargeBg}`}
+                    style={{ transform: `scaleX(${hud.specialCharge})` }}
+                  />
+                  <span className="relative z-10 inline-flex items-center">
+                    {hud.petId ? <PetEmblem petId={hud.petId} size={15} /> : <Zap className="w-3 h-3" />}
+                  </span>
+                  <span className="relative z-10 sm:hidden">
                     {specialOngoing
                       ? `${hud.activeSpecialLabel} ${hud.activeSpecialRemainingSec.toFixed(1)}s`
-                      : petTheme.desktopLabel}
+                      : petTheme.shortLabel}
                   </span>
-                  {!specialOngoing && (
-                    <span
-                      className={`px-1 py-0.5 rounded text-[9px] font-mono font-black leading-none border ${
-                        isXbox
-                          ? 'bg-[#DC2626] text-white border-[#090D16]'
-                          : 'bg-[#090D16]/75 text-white border-white/20'
-                      }`}
-                    >
-                      {prompts.specialShort}
+                  <span className="relative z-10 hidden sm:inline-flex items-center gap-1">
+                    <span>
+                      {specialOngoing
+                        ? `${hud.activeSpecialLabel} ${hud.activeSpecialRemainingSec.toFixed(1)}s`
+                        : petTheme.desktopLabel}
                     </span>
-                  )}
-                </span>
-              </button>
+                    {!specialOngoing && (
+                      <span
+                        className={`px-1 py-0.5 rounded text-[9px] font-mono font-black leading-none border ${
+                          isXbox
+                            ? 'bg-[#DC2626] text-white border-[#090D16]'
+                            : 'bg-[#090D16]/75 text-white border-white/20'
+                        }`}
+                      >
+                        {prompts.specialShort}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              )}
 
               {/* Compact Co-Pilot Pet Status */}
               {hud.frogActive && (
@@ -301,13 +348,22 @@ export function GameHud({
               </div>
 
               <div className="flex items-center gap-1 pointer-events-auto">
+                {isTouchDevice && canFullscreen && onToggleFullscreen && (
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    {...makeButtonHandlers(onToggleFullscreen)}
+                    aria-label={isFullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}
+                    title={isFullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}
+                    className="touch-manipulation w-8 h-8 sm:w-7 sm:h-7 rounded-md bg-[#0B1422]/86 border border-[#090D16] shadow-[0_2px_0_#090D16] flex items-center justify-center text-slate-200 hover:bg-slate-800 cursor-pointer"
+                  >
+                    {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                  </button>
+                )}
                 <button
                   type="button"
                   tabIndex={-1}
-                  onClick={(e) => {
-                    e.currentTarget.blur();
-                    onToggleMute();
-                  }}
+                  {...makeButtonHandlers(onToggleMute)}
                   aria-label={muted ? 'Activar sonido (M)' : 'Silenciar sonido (M)'}
                   title={muted ? 'Activar sonido [M]' : 'Silenciar [M]'}
                   className="touch-manipulation w-8 h-8 sm:w-7 sm:h-7 rounded-md bg-[#0B1422]/86 border border-[#090D16] shadow-[0_2px_0_#090D16] flex items-center justify-center text-slate-200 hover:bg-slate-800 cursor-pointer"
@@ -317,10 +373,7 @@ export function GameHud({
                 <button
                   type="button"
                   tabIndex={-1}
-                  onClick={(e) => {
-                    e.currentTarget.blur();
-                    onRestart();
-                  }}
+                  {...makeButtonHandlers(onRestart)}
                   aria-label="Reiniciar partida (R)"
                   title="Reiniciar [R]"
                   className="touch-manipulation w-8 h-8 sm:w-7 sm:h-7 rounded-md bg-[#0B1422]/86 border border-[#090D16] shadow-[0_2px_0_#090D16] flex items-center justify-center text-slate-200 hover:bg-slate-800 cursor-pointer"
@@ -330,10 +383,7 @@ export function GameHud({
                 <button
                   type="button"
                   tabIndex={-1}
-                  onClick={(e) => {
-                    e.currentTarget.blur();
-                    onPause();
-                  }}
+                  {...makeButtonHandlers(onPause)}
                   aria-label={`Pausar juego (${prompts.pauseShort})`}
                   title={`Pausa [${prompts.pauseShort}]`}
                   className="touch-manipulation min-w-8 h-8 sm:h-7 px-1.5 rounded-md bg-[#0B1422]/86 border border-[#090D16] shadow-[0_2px_0_#090D16] inline-flex items-center justify-center gap-1 text-slate-200 hover:bg-slate-800 cursor-pointer"
@@ -505,121 +555,166 @@ export function GameHud({
         </div>
       )}
 
-      {/* Bottom-Right Dual-Mode Ability Dock: Slot 1 (Auto) <-> Swap <-> Slot 2 (Manual) */}
+      {/* Bottom-Left Subtle Touch Drag Hint (only on touch devices when no milestone cut-in is visible) */}
+      {showTouchThumbDock && !hud.comboMilestone && (
+        <div
+          aria-hidden="true"
+          className="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] left-[max(0.5rem,env(safe-area-inset-left))] pointer-events-none px-2 py-1 rounded-md bg-[#0B1422]/60 border border-slate-700/50 text-[10px] font-semibold tracking-wide text-slate-300/85"
+        >
+          ◀ Mover ▶
+        </div>
+      )}
+
+      {/* Bottom-Right Dual-Mode Ability Dock: Slot 1 (Auto) <-> Swap <-> Slot 2 (Manual) + Touch Pet Special */}
       <div
         data-testid="dual-ability-dock"
-        className="self-end flex items-center gap-1.5 pointer-events-auto"
+        className="self-end flex flex-col items-end gap-1.5 pointer-events-auto"
       >
-        {/* Slot 1: Primary Auto-Fire */}
-        <div
-          aria-label={`Habilidad principal automática ${primarySp.name}`}
-          title={`Principal (Auto-Disparo): ${primarySp.name}`}
-          className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#0B1422]/88 border border-[#090D16] shadow-[0_2px_0_#090D16]"
-        >
-          <SpeciesEmblem
-            speciesId={hud.primarySpecies}
-            color={primarySp.accentColor}
-            unlocked={true}
-            size={15}
-          />
-          <div className="leading-none">
-            <div className="text-[8px] font-bold uppercase tracking-wider text-emerald-400">
-              Auto
-            </div>
-            <div className="text-[11px] font-display font-bold text-white whitespace-nowrap">
-              {primarySp.name}
-            </div>
-          </div>
-        </div>
-
-        {/* Rotate Abilities Button ([Q] or Xbox [X / LB]) */}
-        <button
-          type="button"
-          tabIndex={-1}
-          disabled={!hud.canSwapAbilities}
-          onClick={(e) => {
-            e.currentTarget.blur();
-            onSwapAbilities();
-          }}
-          data-testid="swap-ability-btn"
-          aria-label={`Rotar habilidad principal y secundaria con ${prompts.swapFull}`}
-          title={
-            hud.canSwapAbilities
-              ? `Rotar Principal ↔ Secundaria [${prompts.swapFull}]`
-              : `Recoge una 2ª evolución para rotar habilidades [${prompts.swapShort}]`
-          }
-          className={`touch-manipulation inline-flex items-center gap-1 min-h-[40px] sm:min-h-[34px] px-2.5 py-1.5 rounded-lg border border-[#090D16] shadow-[0_2px_0_#090D16] text-[11px] font-bold whitespace-nowrap transition-transform active:translate-y-0.5 ${
-            hud.canSwapAbilities
-              ? isXbox
-                ? 'bg-[#2563EB] hover:bg-[#1D4ED8] text-white cursor-pointer'
-                : 'bg-sky-600 hover:bg-sky-500 text-white cursor-pointer'
-              : 'bg-[#0B1422]/80 text-slate-400 cursor-not-allowed'
-          }`}
-        >
-          <ArrowLeftRight className="w-3.5 h-3.5" />
-          <span
-            className={
-              isXbox
-                ? 'px-1 py-0.5 rounded bg-[#1D4ED8] text-white font-mono text-[10px] leading-none border border-blue-300/40'
-                : 'font-mono'
-            }
+        {showTouchThumbDock && (
+          <button
+            type="button"
+            tabIndex={-1}
+            {...makeButtonHandlers(onTriggerSpecial, !specialReady && !specialOngoing)}
+            disabled={!specialReady && !specialOngoing}
+            data-testid="touch-pet-special-btn"
+            aria-label={`Activar ${petInfo.specialName}`}
+            title={`${petInfo.name} — ${petInfo.specialName}: ${petInfo.specialDesc}`}
+            className={`touch-manipulation relative overflow-hidden inline-flex items-center gap-1.5 min-h-[46px] px-3 py-1.5 rounded-xl border-2 border-[#090D16] shadow-[0_3px_0_#090D16] text-xs font-extrabold whitespace-nowrap transition-transform active:translate-y-0.5 ${
+              specialOngoing
+                ? petTheme.activeClass
+                : specialReady
+                ? petTheme.readyClass
+                : 'bg-[#0B1422]/88 text-slate-400 cursor-not-allowed'
+            }`}
           >
-            {isXbox ? prompts.swapShort : `[${prompts.swapShort}]`}
-          </span>
-        </button>
+            <span
+              aria-hidden="true"
+              className={`absolute inset-0 origin-left ${petTheme.chargeBg}`}
+              style={{ transform: `scaleX(${hud.specialCharge})` }}
+            />
+            <span className="relative z-10 inline-flex items-center">
+              {hud.petId ? <PetEmblem petId={hud.petId} size={17} /> : <Zap className="w-3.5 h-3.5" />}
+            </span>
+            <span className="relative z-10">
+              {specialOngoing
+                ? `${hud.activeSpecialLabel} ${hud.activeSpecialRemainingSec.toFixed(1)}s`
+                : petTheme.desktopLabel}
+            </span>
+          </button>
+        )}
 
-        {/* Slot 2: Manual Secondary Power Skill ([E] or Xbox [A / RT]) */}
-        <button
-          type="button"
-          tabIndex={-1}
-          disabled={!secondaryReady}
-          onClick={(e) => {
-            e.currentTarget.blur();
-            onFireSecondary();
-          }}
-          data-testid="secondary-skill-btn"
-          aria-label={`Disparar habilidad secundaria ${hud.secondaryName} con ${prompts.secondaryFull}`}
-          title={`Secundaria Manual [${prompts.secondaryFull}]: ${hud.secondaryName}`}
-          className={`touch-manipulation relative overflow-hidden inline-flex items-center gap-1.5 min-h-[40px] sm:min-h-[34px] px-3 py-1.5 rounded-lg border-2 border-[#090D16] shadow-[0_3px_0_#090D16] text-left whitespace-nowrap transition-transform active:translate-y-0.5 ${
-            secondaryReady
-              ? 'bg-[#111C2E] text-white cursor-pointer'
-              : 'bg-[#0B1422]/88 text-slate-400 cursor-not-allowed'
-          }`}
-          style={{
-            borderColor: secondaryReady ? secondarySp.accentColor : '#090D16',
-          }}
-        >
-          <span
-            aria-hidden="true"
-            className="absolute inset-0 origin-left opacity-30"
-            style={{
-              backgroundColor: secondarySp.accentColor,
-              transform: `scaleX(${hud.secondaryCharge})`,
-            }}
-          />
-          <SpeciesEmblem
-            speciesId={hud.secondarySpecies}
-            color={secondarySp.accentColor}
-            unlocked={true}
-            size={16}
-          />
-          <div className="relative z-10 leading-none">
-            <div className="flex items-center gap-1 text-[8px] font-bold uppercase tracking-wider text-amber-300">
-              <Crosshair className="w-2.5 h-2.5" />
-              <span>Secundaria</span>
-              <span
-                className={`px-1 py-0.5 rounded font-mono text-[9px] font-black leading-none ${
-                  isXbox ? 'bg-[#107C10] text-white border border-emerald-300/40' : 'text-amber-200'
-                }`}
-              >
-                {isXbox ? prompts.secondaryShort : `[${prompts.secondaryShort}]`}
-              </span>
-            </div>
-            <div className="text-[11px] sm:text-xs font-display font-black text-white mt-0.5">
-              {hud.secondaryName}
+        <div className="flex items-center gap-1.5">
+          {/* Slot 1: Primary Auto-Fire */}
+          <div
+            aria-label={`Habilidad principal automática ${primarySp.name}`}
+            title={`Principal (Auto-Disparo): ${primarySp.name}`}
+            className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#0B1422]/88 border border-[#090D16] shadow-[0_2px_0_#090D16]"
+          >
+            <SpeciesEmblem
+              speciesId={hud.primarySpecies}
+              color={primarySp.accentColor}
+              unlocked={true}
+              size={15}
+            />
+            <div className="leading-none">
+              <div className="text-[8px] font-bold uppercase tracking-wider text-emerald-400">
+                Auto
+              </div>
+              <div className="text-[11px] font-display font-bold text-white whitespace-nowrap">
+                {primarySp.name}
+              </div>
             </div>
           </div>
-        </button>
+
+          {/* Rotate Abilities Button ([Q] or Xbox [X / LB]) */}
+          <button
+            type="button"
+            tabIndex={-1}
+            disabled={!hud.canSwapAbilities}
+            {...makeButtonHandlers(onSwapAbilities, !hud.canSwapAbilities)}
+            data-testid="swap-ability-btn"
+            aria-label={`Rotar habilidad principal y secundaria con ${prompts.swapFull}`}
+            title={
+              hud.canSwapAbilities
+                ? `Rotar Principal ↔ Secundaria [${prompts.swapFull}]`
+                : `Recoge una 2ª evolución para rotar habilidades [${prompts.swapShort}]`
+            }
+            className={`touch-manipulation inline-flex items-center gap-1 ${
+              showTouchThumbDock ? 'min-h-[46px] px-3' : 'min-h-[40px] sm:min-h-[34px] px-2.5'
+            } py-1.5 rounded-lg border border-[#090D16] shadow-[0_2px_0_#090D16] text-[11px] font-bold whitespace-nowrap transition-transform active:translate-y-0.5 ${
+              hud.canSwapAbilities
+                ? isXbox
+                  ? 'bg-[#2563EB] hover:bg-[#1D4ED8] text-white cursor-pointer'
+                  : 'bg-sky-600 hover:bg-sky-500 text-white cursor-pointer'
+                : 'bg-[#0B1422]/80 text-slate-400 cursor-not-allowed'
+            }`}
+          >
+            <ArrowLeftRight className="w-3.5 h-3.5" />
+            <span
+              className={
+                isXbox
+                  ? 'px-1 py-0.5 rounded bg-[#1D4ED8] text-white font-mono text-[10px] leading-none border border-blue-300/40'
+                  : 'font-mono'
+              }
+            >
+              {showTouchThumbDock ? 'Rotar' : isXbox ? prompts.swapShort : `[${prompts.swapShort}]`}
+            </span>
+          </button>
+
+          {/* Slot 2: Manual Secondary Power Skill ([E] or Xbox [A / RT]) */}
+          <button
+            type="button"
+            tabIndex={-1}
+            disabled={!secondaryReady}
+            {...makeButtonHandlers(onFireSecondary, !secondaryReady)}
+            data-testid="secondary-skill-btn"
+            aria-label={`Disparar habilidad secundaria ${hud.secondaryName} con ${prompts.secondaryFull}`}
+            title={`Secundaria Manual [${prompts.secondaryFull}]: ${hud.secondaryName}`}
+            className={`touch-manipulation relative overflow-hidden inline-flex items-center gap-1.5 ${
+              showTouchThumbDock ? 'min-h-[46px] px-3.5' : 'min-h-[40px] sm:min-h-[34px] px-3'
+            } py-1.5 rounded-lg border-2 border-[#090D16] shadow-[0_3px_0_#090D16] text-left whitespace-nowrap transition-transform active:translate-y-0.5 ${
+              secondaryReady
+                ? 'bg-[#111C2E] text-white cursor-pointer'
+                : 'bg-[#0B1422]/88 text-slate-400 cursor-not-allowed'
+            }`}
+            style={{
+              borderColor: secondaryReady ? secondarySp.accentColor : '#090D16',
+            }}
+          >
+            <span
+              aria-hidden="true"
+              className="absolute inset-0 origin-left opacity-30"
+              style={{
+                backgroundColor: secondarySp.accentColor,
+                transform: `scaleX(${hud.secondaryCharge})`,
+              }}
+            />
+            <SpeciesEmblem
+              speciesId={hud.secondarySpecies}
+              color={secondarySp.accentColor}
+              unlocked={true}
+              size={16}
+            />
+            <div className="relative z-10 leading-none">
+              <div className="flex items-center gap-1 text-[8px] font-bold uppercase tracking-wider text-amber-300">
+                <Crosshair className="w-2.5 h-2.5" />
+                <span>Secundaria</span>
+                {!showTouchThumbDock && (
+                  <span
+                    className={`px-1 py-0.5 rounded font-mono text-[9px] font-black leading-none ${
+                      isXbox ? 'bg-[#107C10] text-white border border-emerald-300/40' : 'text-amber-200'
+                    }`}
+                  >
+                    {isXbox ? prompts.secondaryShort : `[${prompts.secondaryShort}]`}
+                  </span>
+                )}
+              </div>
+              <div className="text-[11px] sm:text-xs font-display font-black text-white mt-0.5">
+                {hud.secondaryName}
+              </div>
+            </div>
+          </button>
+        </div>
       </div>
     </div>
   );

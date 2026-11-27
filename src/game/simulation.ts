@@ -387,6 +387,10 @@ export class GameSimulation {
     return this.levelIndex;
   }
 
+  public getPlayerPosition(): { x: number; y: number } {
+    return { x: this.playerX, y: this.playerY };
+  }
+
   public startNewGame() {
     if ((this.status === 'playing' || this.status === 'paused' || this.status === 'level_clear') && this.score > 0 && !this.runRecorded) {
       this.finalizeRunRecord(false);
