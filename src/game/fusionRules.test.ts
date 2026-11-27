@@ -17,6 +17,7 @@ import {
   MENU_MUSIC_SRC,
   getLevelRhythmProfile,
   getMusicTrackForState,
+  soundEngine,
 } from './audio';
 import {
   advanceMutagenPodByShot,
@@ -342,11 +343,24 @@ test('all menu and 5 level music tracks resolve appropriately', () => {
   assert.equal(getMusicTrackForState('playing', 1), LEVEL_1_MUSIC_SRC);
   assert.equal(getMusicTrackForState('paused', 1), LEVEL_1_MUSIC_SRC);
   assert.equal(getMusicTrackForState('playing', 2), LEVEL_2_MUSIC_SRC);
+  assert.equal(LEVEL_2_MUSIC_SRC, '/assets/aistudio/Dionaea_Strike_-_Nivel_2_Cumbia_Villera.m4a');
   assert.equal(getMusicTrackForState('playing', 3), LEVEL_3_MUSIC_SRC);
   assert.equal(getMusicTrackForState('playing', 4), LEVEL_4_MUSIC_SRC);
   assert.equal(LEVEL_4_MUSIC_SRC, '/assets/aistudio/Dionaea_Strike_-_level_4_1399cdc6.m4a');
   assert.notEqual(LEVEL_4_MUSIC_SRC, LEVEL_1_MUSIC_SRC);
   assert.equal(getMusicTrackForState('playing', 5), LEVEL_5_MUSIC_SRC);
+
+  for (const lv of [1, 2, 3, 4, 5] as const) {
+    const prof = getLevelRhythmProfile(lv);
+    assert.ok(prof.startOffsetSec >= 0 && prof.startOffsetSec <= prof.firstDropSec, `Level ${lv} startOffsetSec leads cleanly into drop`);
+  }
+
+  soundEngine.setMusicVolume(0);
+  assert.equal(soundEngine.getMusicVolume(), 0);
+  soundEngine.setSfxVolume(0);
+  assert.equal(soundEngine.getSfxVolume(), 0);
+  soundEngine.setMusicVolume(0.65);
+  soundEngine.setSfxVolume(0.75);
 });
 
 test('Level 1 projectile speeds are calmer, pod shooting cycles evolutions, and locust/bomber AIs work', () => {

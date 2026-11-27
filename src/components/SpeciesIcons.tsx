@@ -170,11 +170,11 @@ export function TitleLogoLockup({ title }: { title: string }) {
 
   return (
     <div
-      className="flex items-center gap-3 sm:gap-4 [@media(max-height:480px)]:gap-2.5 max-w-full"
+      className="flex items-center gap-3 sm:gap-4 [@media(max-height:540px)]:gap-2 max-w-full"
       data-testid="main-menu-logo"
     >
       {/* Reworked Sculpted Squadron Emblem Crest */}
-      <div className="relative shrink-0 w-16 h-16 sm:w-24 sm:h-24 [@media(max-height:480px)]:w-14 [@media(max-height:480px)]:h-14 rounded-full p-[3px] bg-gradient-to-b from-[#FEF08A] via-[#F59E0B] to-[#92400E] shadow-[0_6px_0_#050810,0_10px_24px_rgba(245,158,11,0.28)]">
+      <div className="relative shrink-0 w-14 h-14 sm:w-20 sm:h-20 lg:w-24 lg:h-24 [@media(max-height:540px)]:w-11 [@media(max-height:540px)]:h-11 rounded-full p-[3px] [@media(max-height:540px)]:p-[2px] bg-gradient-to-b from-[#FEF08A] via-[#F59E0B] to-[#92400E] shadow-[0_6px_0_#050810,0_10px_24px_rgba(245,158,11,0.28)] [@media(max-height:540px)]:shadow-[0_3px_0_#050810]">
         <div className="w-full h-full rounded-full overflow-hidden border-2 border-[#050810] bg-[#08101C]">
           {!logoImgFailed ? (
             <img
@@ -196,23 +196,23 @@ export function TitleLogoLockup({ title }: { title: string }) {
 
       {/* Reworked Cel-Shaded Arcade Wordmark */}
       <div className="flex flex-col leading-none min-w-0">
-        <div className="flex items-center gap-2 mb-1 [@media(max-height:480px)]:mb-0.5">
-          <span className="h-1.5 w-6 sm:w-9 rounded-full bg-[#38BDF8] border border-[#050810]" />
-          <span className="h-1.5 w-3.5 sm:w-5 rounded-full bg-[#F8FAFC] border border-[#050810]" />
-          <span className="h-1.5 w-6 sm:w-9 rounded-full bg-[#38BDF8] border border-[#050810]" />
-          <span className="text-[10px] sm:text-[11px] font-mono font-extrabold uppercase tracking-[0.2em] text-amber-300 truncate">
+        <div className="flex items-center gap-2 mb-1 [@media(max-height:540px)]:mb-0.5">
+          <span className="h-1.5 w-6 sm:w-9 [@media(max-height:540px)]:hidden rounded-full bg-[#38BDF8] border border-[#050810]" />
+          <span className="h-1.5 w-3.5 sm:w-5 [@media(max-height:540px)]:hidden rounded-full bg-[#F8FAFC] border border-[#050810]" />
+          <span className="h-1.5 w-6 sm:w-9 [@media(max-height:540px)]:hidden rounded-full bg-[#38BDF8] border border-[#050810]" />
+          <span className="text-[10px] sm:text-[11px] [@media(max-height:540px)]:text-[9px] font-mono font-extrabold uppercase tracking-[0.2em] text-amber-300 truncate">
             ESCUADRÓN PAMPA
           </span>
         </div>
 
-        <h1 className="font-display font-black uppercase tracking-tight text-[1.65rem] sm:text-4xl lg:text-[2.95rem] [@media(max-height:480px)]:text-2xl leading-[0.95] drop-shadow-[0_4px_0_#050810] flex flex-wrap items-baseline gap-x-2">
+        <h1 className="font-display font-black uppercase tracking-tight text-[1.55rem] sm:text-3xl lg:text-[2.8rem] [@media(max-height:540px)]:text-xl leading-[0.95] drop-shadow-[0_4px_0_#050810] flex flex-wrap items-baseline gap-x-2">
           <span className="text-white anime-stroke">{firstWord}</span>
           <span className="bg-gradient-to-b from-[#BEF264] via-[#4ADE80] to-[#16A34A] bg-clip-text text-transparent drop-shadow-[0_3px_0_#050810]">
             {restWords}
           </span>
         </h1>
 
-        <div className="mt-1.5 [@media(max-height:480px)]:hidden h-[3px] w-44 sm:w-64 rounded-full bg-gradient-to-r from-[#FACC15] via-[#4ADE80] to-transparent" />
+        <div className="mt-1.5 [@media(max-height:540px)]:hidden h-[3px] w-44 sm:w-64 rounded-full bg-gradient-to-r from-[#FACC15] via-[#4ADE80] to-transparent" />
       </div>
     </div>
   );

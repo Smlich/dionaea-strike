@@ -1,4 +1,4 @@
-import { getStageBackgroundImage } from './backgroundAssets';
+import { getSeamlessStageBackground, type SeamlessStageBackground } from './backgroundAssets';
 import { ALL_SPECIES_IDS } from './gameConfig';
 import type {
   GameConfig,
@@ -682,25 +682,6 @@ function drawCityNightTerrain(ctx: CanvasRenderingContext2D, width: number, heig
 }
 
 function drawUrbanViaductTerrain(ctx: CanvasRenderingContext2D, width: number, height: number, time: number, beatPulse: number) {
-  // Sweeping twilight street searchlights pulsing with the Rap AR beat
-  ctx.save();
-  for (let s = 0; s < 3; s++) {
-    const originX = width * (0.18 + s * 0.34);
-    const sway = Math.sin(time * (1.3 + s * 0.45) + s * 2) * 145;
-    ctx.fillStyle =
-      s === 1
-        ? `rgba(244, 63, 94, ${(0.09 + beatPulse * 0.1).toFixed(2)})`
-        : `rgba(56, 189, 248, ${(0.09 + beatPulse * 0.1).toFixed(2)})`;
-    ctx.beginPath();
-    ctx.moveTo(originX - 12, height * 0.85);
-    ctx.lineTo(originX + 12, height * 0.85);
-    ctx.lineTo(originX + sway + 115, 0);
-    ctx.lineTo(originX + sway - 115, 0);
-    ctx.closePath();
-    ctx.fill();
-  }
-  ctx.restore();
-
   // Harbor gantry cranes & suspension bridge towers in mid-ground
   const craneSpan = width + 480;
   for (let i = 0; i < 5; i++) {
@@ -928,242 +909,169 @@ function drawHumahuacaAndesTerrain(ctx: CanvasRenderingContext2D, width: number,
 }
 
 /**
- * Draws a high-resolution illustrated landscape image with seamless alternating-mirror
- * horizontal scrolling and subtle vertical camera parallax tied to player altitude.
+ * Draws a pre-blended panoramic stage background in a continuous infinite horizontal loop
+ * with smooth vertical camera parallax and zero seams or overlapping images.
  */
 function drawSeamlessPanorama(
   ctx: CanvasRenderingContext2D,
-  img: HTMLImageElement,
+  bg: SeamlessStageBackground,
   width: number,
   height: number,
   time: number,
   playerY: number,
-  scrollSpeed: number,
-  alpha = 1
+  scrollSpeed: number
 ) {
-  const natW = img.naturalWidth || 1600;
-  const natH = img.naturalHeight || 900;
-  // Slightly oversize height (+10%) to allow smooth vertical parallax shift without exposing edges
-  const drawH = height * 1.1;
-  const scale = drawH / natH;
-  const drawW = Math.max(width * 1.15, Math.ceil(natW * scale));
+  const srcW = bg.width || 1600;
+  const srcH = bg.height || 900;
+  const drawH = Math.ceil(height * 1.08);
+  const scale = drawH / srcH;
+  const drawW = Math.max(Math.ceil(width * 1.1), Math.ceil(srcW * scale));
 
   const yNorm = Math.max(0, Math.min(1, playerY / Math.max(1, height)));
-  const offsetY = -yNorm * (drawH - height);
+  const offsetY = Math.round(-yNorm * (drawH - height));
 
-  const period = drawW * 2;
-  const rawOffset = (time * scrollSpeed) % period;
-  const startX = -rawOffset;
+  const rawOffset = ((time * scrollSpeed) % drawW + drawW) % drawW;
+  const startX = -Math.floor(rawOffset);
 
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  // Draw enough alternating normal/mirrored tiles to cover full viewport width seamlessly
-  for (let tileIdx = -1; tileIdx <= Math.ceil(width / drawW) + 2; tileIdx++) {
-    const x = startX + tileIdx * drawW;
-    if (x + drawW < -2 || x > width + 2) continue;
-    const isMirrored = Math.abs(tileIdx) % 2 === 1;
-    if (isMirrored) {
-      ctx.save();
-      ctx.translate(x + drawW, offsetY);
-      ctx.scale(-1, 1);
-      ctx.drawImage(img, 0, 0, drawW + 1.5, drawH);
-      ctx.restore();
-    } else {
-      ctx.drawImage(img, x, offsetY, drawW + 1.5, drawH);
-    }
+  for (let x = startX; x < width + 2; x += drawW) {
+    ctx.drawImage(bg.source, x, offsetY, drawW + 1, drawH);
   }
+}
 
-  // Soft atmospheric mist veil centered on each tile boundary to hide mirror symmetry in clouds/foliage
-  for (let tileIdx = 0; tileIdx <= Math.ceil(width / drawW) + 2; tileIdx++) {
-    const seamX = startX + tileIdx * drawW;
-    if (seamX < -120 || seamX > width + 120) continue;
-    const veil = ctx.createLinearGradient(seamX - 95, 0, seamX + 95, 0);
-    veil.addColorStop(0, 'rgba(226, 232, 240, 0)');
-    veil.addColorStop(0.5, 'rgba(226, 232, 240, 0.14)');
-    veil.addColorStop(1, 'rgba(226, 232, 240, 0)');
-    ctx.fillStyle = veil;
-    ctx.fillRect(seamX - 95, 0, 190, height);
+/**
+ * Crisp combat embers when a boss fight is active — zero background ships,
+ * zero searchlight laser beams, and zero blurry screen-wide dark/red washes.
+ */
+function drawInvasionSignals(ctx: CanvasRenderingContext2D, state: RenderState) {
+  const { width, height, time, boss } = state;
+  if (!boss.active) return;
+
+  const emberSpan = width + 180;
+  ctx.save();
+  for (let i = 0; i < 12; i++) {
+    const ex = ((hash01(i * 43.1) * emberSpan - time * (240 + (i % 4) * 55)) % emberSpan + emberSpan) % emberSpan - 80;
+    const ey = ((hash01(i * 17.7) * height - time * (28 + (i % 3) * 16)) % height + height) % height;
+    ctx.fillStyle = i % 2 === 0 ? '#FB923C' : '#FDE047';
+    ctx.fillRect(ex, ey, 4, 2);
   }
   ctx.restore();
 }
 
 /**
- * Dynamic atmospheric evolution + unmistakable approaching invasion cues
- * (distant swarm formations, horizon smoke plumes, anti-air searchlights,
- *  storm darkening, lightning flickers, and the looming silhouette of the
- *  invading Insectoid Dreadnought emerging from the right horizon).
+ * Crisp atmospheric effects tailored to each Earth stage without muddying foreground visibility.
  */
-function drawInvasionSignals(ctx: CanvasRenderingContext2D, state: RenderState) {
-  const { width, height, time, boss } = state;
-  const beatPulse = Number.isFinite(state.beatPulse) ? state.beatPulse : 0;
-  const intensity = Number.isFinite(state.invasionIntensity)
-    ? Math.max(0, Math.min(1, state.invasionIntensity))
-    : 0;
-
-  // Subtle readability scrim so foreground bullets & sprites stay crisp over rich painted art
-  const baseDarken = 0.14 + intensity * 0.16;
-  const stormGrad = ctx.createLinearGradient(0, 0, width, height);
-  stormGrad.addColorStop(0, `rgba(9, 14, 26, ${(baseDarken * 0.95).toFixed(2)})`);
-  stormGrad.addColorStop(0.55, `rgba(18, 22, 40, ${(baseDarken * 0.72).toFixed(2)})`);
-  stormGrad.addColorStop(
-    1,
-    intensity > 0.32
-      ? `rgba(127, 29, 29, ${(0.08 + intensity * 0.24 + beatPulse * 0.05).toFixed(2)})`
-      : `rgba(12, 20, 34, ${(baseDarken * 0.8).toFixed(2)})`
-  );
-  ctx.fillStyle = stormGrad;
-  ctx.fillRect(0, 0, width, height);
-
-  if (intensity < 0.12 && !boss.active) return;
-
-  // 1. Distant horizon smoke plumes rising on the right flank (intensity >= 0.28)
-  if (intensity >= 0.28) {
-    const smokeAlpha = Math.min(0.45, (intensity - 0.22) * 0.55);
-    const plumeSpan = width + 320;
-    ctx.save();
-    for (let i = 0; i < 4; i++) {
-      const px = ((width * 0.65 + i * 240 - time * (32 + i * 7)) % plumeSpan + plumeSpan) % plumeSpan - 120;
-      const baseY = height * 0.86;
-      const topY = height * (0.48 - intensity * 0.12);
-      const grad = ctx.createLinearGradient(px, baseY, px - 55, topY);
-      grad.addColorStop(0, `rgba(24, 24, 36, ${smokeAlpha.toFixed(2)})`);
-      grad.addColorStop(0.6, `rgba(55, 38, 52, ${(smokeAlpha * 0.6).toFixed(2)})`);
-      grad.addColorStop(1, 'rgba(30, 30, 42, 0)');
-      ctx.fillStyle = grad;
+function drawLevelAtmosphereEffects(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  time: number,
+  beatPulse: number,
+  windForceX: number,
+  landscape: LandscapeId
+) {
+  if (landscape === 'pampa_dawn') {
+    // Golden floating Pampa pollen motes & crisp warm morning breeze lines
+    const span = width + 160;
+    for (let i = 0; i < 14; i++) {
+      const px = ((hash01(i * 17.3) * span - time * (75 + (i % 4) * 22)) % span + span) % span - 80;
+      const py = height * (0.14 + hash01(i * 9.1) * 0.72) + Math.sin(time * 2.4 + i) * 9;
+      ctx.fillStyle = i % 2 === 0 ? '#FEF08A' : '#FDE047';
       ctx.beginPath();
-      ctx.moveTo(px - 14, baseY);
-      ctx.quadraticCurveTo(px - 28 + Math.sin(time * 1.4 + i) * 14, (baseY + topY) * 0.5, px - 68, topY);
-      ctx.lineTo(px - 18, topY);
-      ctx.quadraticCurveTo(px + 8 + Math.sin(time * 1.4 + i) * 10, (baseY + topY) * 0.5, px + 18, baseY);
-      ctx.closePath();
+      ctx.arc(px, py, 1.8 + beatPulse * 0.9, 0, Math.PI * 2);
       ctx.fill();
     }
-    ctx.restore();
-  }
-
-  // 2. Distant V-formation invading insectoid silhouettes patrolling the far sky (intensity >= 0.16)
-  if (intensity >= 0.16) {
-    const swarmCount = Math.min(18, Math.floor(4 + intensity * 14));
-    const span = width + 260;
-    ctx.save();
-    ctx.fillStyle = `rgba(15, 23, 42, ${(0.28 + intensity * 0.34).toFixed(2)})`;
-    for (let i = 0; i < swarmCount; i++) {
-      const speed = 42 + (i % 4) * 18 + intensity * 26;
-      const sx = ((hash01(i * 19.3) * span - time * speed) % span + span) % span - 110;
-      const sy = height * (0.13 + hash01(i * 31.7) * 0.38) + Math.sin(time * 3.5 + i) * 6;
-      const sz = 4.5 + (i % 3) * 2.2;
-      const flap = Math.sin(time * 24 + i * 1.7) * 3;
-      ctx.beginPath();
-      ctx.ellipse(sx, sy, sz * 1.4, sz * 0.55, 0, 0, Math.PI * 2);
-      ctx.fill();
-      // Faint iridescent silhouette wings
-      ctx.fillStyle = `rgba(244, 114, 182, ${(0.18 + intensity * 0.22).toFixed(2)})`;
-      ctx.beginPath();
-      ctx.ellipse(sx + 1, sy - sz * 0.65 + flap * 0.3, sz * 1.15, sz * 0.45, -0.45, 0, Math.PI * 2);
-      ctx.fill();
-      // Tiny glowing green distant eye dot
-      ctx.fillStyle = `rgba(74, 222, 128, ${(0.35 + intensity * 0.4).toFixed(2)})`;
-      ctx.fillRect(sx - sz * 1.2, sy - 1, 2.2, 2.2);
-      ctx.fillStyle = `rgba(15, 23, 42, ${(0.28 + intensity * 0.34).toFixed(2)})`;
-    }
-    ctx.restore();
-  }
-
-  // 3. Sweeping anti-air searchlights scanning the stormy sky (intensity >= 0.4)
-  if (intensity >= 0.4) {
-    const beamAlpha = Math.min(0.22, (intensity - 0.35) * 0.26 + beatPulse * 0.05);
-    ctx.save();
-    for (let b = 0; b < 3; b++) {
-      const originX = width * (0.28 + b * 0.28);
-      const sway = Math.sin(time * (0.95 + b * 0.32) + b * 2.1) * 185;
-      ctx.fillStyle =
-        b === 2
-          ? `rgba(244, 63, 94, ${(beamAlpha * 0.85).toFixed(2)})`
-          : `rgba(254, 240, 138, ${(beamAlpha * 0.7).toFixed(2)})`;
-      ctx.beginPath();
-      ctx.moveTo(originX - 8, height);
-      ctx.lineTo(originX + 8, height);
-      ctx.lineTo(originX + sway + 85, 0);
-      ctx.lineTo(originX + sway - 85, 0);
-      ctx.closePath();
-      ctx.fill();
-    }
-    ctx.restore();
-  }
-
-  // 4. Looming distant Dreadnought Mothership silhouette emerging on the right horizon (intensity >= 0.56)
-  if (intensity >= 0.56) {
-    const shipVis = Math.min(1, (intensity - 0.52) / 0.42);
-    const shipX = width - 40 - shipVis * 110;
-    const shipY = height * 0.29 + Math.sin(time * 0.9) * 8;
-    const shipScale = 0.65 + shipVis * 0.55;
-    ctx.save();
-    ctx.translate(shipX, shipY);
-    ctx.scale(shipScale, shipScale);
-    ctx.globalAlpha = 0.22 + shipVis * 0.42;
-
-    // Colossal winged crown dreadnought silhouette in mist
-    ctx.fillStyle = '#0B1220';
+    ctx.strokeStyle = 'rgba(254, 240, 138, 0.28)';
+    ctx.lineWidth = 1.4;
     ctx.beginPath();
-    ctx.moveTo(-115, 6);
-    ctx.lineTo(-55, -28);
-    ctx.lineTo(65, -36);
-    ctx.lineTo(135, -12);
-    ctx.lineTo(125, 22);
-    ctx.lineTo(42, 34);
-    ctx.lineTo(-68, 26);
-    ctx.closePath();
-    ctx.fill();
-
-    // Subtle royal crown spire silhouette atop hull
-    ctx.beginPath();
-    ctx.moveTo(-18, -28);
-    ctx.lineTo(-24, -52);
-    ctx.lineTo(-6, -38);
-    ctx.lineTo(4, -58);
-    ctx.lineTo(16, -38);
-    ctx.lineTo(32, -50);
-    ctx.lineTo(26, -30);
-    ctx.closePath();
-    ctx.fill();
-
-    // Pulsing crimson & green invasion signal beacons along the dreadnought
-    const pulse = 0.45 + Math.sin(time * 6.5) * 0.35 + beatPulse * 0.2;
-    ctx.fillStyle = `rgba(244, 63, 94, ${Math.min(1, pulse).toFixed(2)})`;
-    for (const [bx, by] of [
-      [-92, 6],
-      [-45, -8],
-      [10, -12],
-      [68, -6],
-    ]) {
-      ctx.beginPath();
-      ctx.arc(bx, by, 4.2, 0, Math.PI * 2);
-      ctx.fill();
+    for (let i = 0; i < 6; i++) {
+      const bx = ((hash01(i * 31.7) * span - time * 320) % span + span) % span - 80;
+      const by = height * (0.18 + i * 0.13);
+      ctx.moveTo(bx, by);
+      ctx.lineTo(bx + 36, by);
     }
-    ctx.fillStyle = `rgba(74, 222, 128, ${Math.min(1, pulse).toFixed(2)})`;
-    ctx.beginPath();
-    ctx.ellipse(-74, 2, 9, 5, -0.15, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  // 5. High-intensity storm embers & occasional distant lightning flash (intensity >= 0.72)
-  if (intensity >= 0.72) {
-    const emberSpan = width + 180;
-    ctx.save();
+    ctx.stroke();
+  } else if (landscape === 'jungle_falls') {
+    // Crisp Misiones tropical fireflies pulsing to Cumbia Villera groove + drifting jungle leaves
+    const span = width + 160;
     for (let i = 0; i < 16; i++) {
-      const ex = ((hash01(i * 43.1) * emberSpan - time * (240 + (i % 4) * 60)) % emberSpan + emberSpan) % emberSpan - 80;
-      const ey = ((hash01(i * 17.7) * height - time * (32 + (i % 3) * 18)) % height + height) % height;
-      ctx.fillStyle = i % 2 === 0 ? 'rgba(251, 146, 60, 0.75)' : 'rgba(254, 240, 138, 0.65)';
-      ctx.fillRect(ex, ey, 4.5, 2.2);
+      const fx = ((hash01(i * 19.7) * span - time * (68 + (i % 4) * 18)) % span + span) % span - 80;
+      const fy = height * (0.18 + hash01(i * 7.1) * 0.68) + Math.sin(time * 3.8 + i) * 12;
+      const r = 2.0 + beatPulse * 1.4;
+      ctx.fillStyle = i % 2 === 0 ? '#34D399' : '#FACC15';
+      ctx.beginPath();
+      ctx.arc(fx, fy, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.arc(fx, fy, r * 0.45, 0, Math.PI * 2);
+      ctx.fill();
     }
-    // Brief subtle distant storm lightning pulse on occasional beats
-    const lightningGate = Math.sin(time * 1.9) * Math.sin(time * 7.3);
-    if (lightningGate > 0.94) {
-      ctx.fillStyle = 'rgba(224, 242, 254, 0.14)';
-      ctx.fillRect(0, 0, width, height);
+    // Small gliding jungle leaves
+    for (let i = 0; i < 6; i++) {
+      const lx = ((hash01(i * 41.9) * span - time * (120 + (i % 3) * 26)) % span + span) % span - 80;
+      const ly = height * (0.16 + hash01(i * 13.7) * 0.66) + Math.sin(time * 4.5 + i * 2) * 14;
+      ctx.save();
+      ctx.translate(lx, ly);
+      ctx.rotate(Math.sin(time * 3 + i) * 0.5 - 0.35);
+      ctx.fillStyle = '#22C55E';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 5.5, 2.3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
     }
-    ctx.restore();
+  } else if (landscape === 'city_night') {
+    // Crisp Buenos Aires night rain + low street splash glints
+    const span = width + 160;
+    ctx.strokeStyle = 'rgba(186, 230, 253, 0.34)';
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    for (let i = 0; i < 34; i++) {
+      const rx = ((hash01(i * 23.1) * span - time * 420) % span + span) % span - 80;
+      const ry = (hash01(i * 11.7) * height + time * 640) % height;
+      ctx.moveTo(rx, ry);
+      ctx.lineTo(rx - 10, ry + 19);
+    }
+    ctx.stroke();
+    // Crisp city light glints near lower horizon
+    for (let i = 0; i < 10; i++) {
+      const gx = ((i * 145 - time * 110) % span + span) % span - 70;
+      const gy = height * 0.94;
+      ctx.fillStyle = i % 2 === 0 ? '#38BDF8' : '#FBBF24';
+      ctx.fillRect(gx, gy, 10, 2);
+    }
+  } else if (landscape === 'urban_viaduct') {
+    // Fast highway taillight streaks along bottom edge & crisp motion sparks
+    const span = width + 240;
+    for (let i = 0; i < 12; i++) {
+      const cx = ((hash01(i * 33.7) * span - time * (320 + (i % 3) * 75)) % span + span) % span - 100;
+      const cy = height * (0.87 + (i % 3) * 0.03);
+      ctx.fillStyle = i % 2 === 0 ? '#FDE047' : '#FB7185';
+      ctx.fillRect(cx, cy, 24, 2.5);
+    }
+  } else if (landscape === 'humahuaca_andes') {
+    // High-altitude golden mineral dust & crisp Andean sun sparkles
+    const span = width + 180;
+    for (let i = 0; i < 14; i++) {
+      const dx = ((hash01(i * 27.3) * span - time * (115 + (i % 4) * 28)) % span + span) % span - 90;
+      const dy = height * (0.15 + hash01(i * 14.9) * 0.72) + Math.sin(time * 2.8 + i) * 7;
+      ctx.fillStyle = i % 3 === 0 ? '#FDE047' : i % 3 === 1 ? '#FB923C' : '#F8FAFC';
+      ctx.fillRect(dx, dy, 3, 2);
+    }
+    if (windForceX < -5) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+      ctx.lineWidth = 2.2;
+      const gustSpan = width + 220;
+      for (let i = 0; i < 14; i++) {
+        const gx = ((hash01(i * 13.9) * gustSpan - time * 980) % gustSpan + gustSpan) % gustSpan - 100;
+        const gy = height * (0.1 + hash01(i * 29.1) * 0.78);
+        ctx.beginPath();
+        ctx.moveTo(gx, gy);
+        ctx.lineTo(gx + 90, gy);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
   }
 }
 
@@ -1171,11 +1079,9 @@ function drawEarthLevelBackdrop(ctx: CanvasRenderingContext2D, state: RenderStat
   const { width, height, time, beatPulse, windForceX, landscape, prevLandscape, landscapeBlend, playerY } = state;
   const t = Math.max(0, Math.min(1, landscapeBlend));
 
-  const curImg = getStageBackgroundImage(landscape);
-  const prevImg = prevLandscape !== landscape ? getStageBackgroundImage(prevLandscape) : null;
+  const curBg = getSeamlessStageBackground(landscape);
 
-  if (curImg) {
-    // High-resolution illustrated 2D anime stage panorama!
+  if (curBg) {
     const baseSpeed =
       landscape === 'urban_viaduct'
         ? 84
@@ -1185,54 +1091,8 @@ function drawEarthLevelBackdrop(ctx: CanvasRenderingContext2D, state: RenderStat
         ? 56
         : 52;
 
-    if (prevImg && t < 0.99) {
-      drawSeamlessPanorama(ctx, prevImg, width, height, time, playerY, baseSpeed, 1);
-      drawSeamlessPanorama(ctx, curImg, width, height, time, playerY, baseSpeed, t);
-    } else {
-      drawSeamlessPanorama(ctx, curImg, width, height, time, playerY, baseSpeed, 1);
-    }
-
-    // Subtle music-synced atmospheric glow & level weather overlays on top of painted panorama
-    if (landscape === 'city_night') {
-      // Crisp angled Buenos Aires night rain
-      ctx.strokeStyle = 'rgba(186, 230, 253, 0.22)';
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      for (let i = 0; i < 32; i++) {
-        const rx = ((hash01(i * 23.1) * (width + 160) - time * 420) % (width + 160) + (width + 160)) % (width + 160) - 80;
-        const ry = (hash01(i * 11.7) * height + time * 640) % height;
-        ctx.moveTo(rx, ry);
-        ctx.lineTo(rx - 10, ry + 20);
-      }
-      ctx.stroke();
-    } else if (landscape === 'jungle_falls') {
-      // Bioluminescent Misiones fireflies pulsing with the Cumbia groove
-      const ffSpan = width + 140;
-      for (let i = 0; i < 14; i++) {
-        const fx = ((hash01(i * 19.7) * ffSpan - time * (68 + (i % 4) * 18)) % ffSpan + ffSpan) % ffSpan - 70;
-        const fy = height * (0.24 + hash01(i * 7.1) * 0.62) + Math.sin(time * 3.8 + i) * 12;
-        const r = 2.2 + beatPulse * 1.8;
-        ctx.fillStyle = i % 2 === 0 ? 'rgba(250, 204, 21, 0.78)' : 'rgba(52, 211, 153, 0.78)';
-        ctx.beginPath();
-        ctx.arc(fx, fy, r, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    } else if (landscape === 'humahuaca_andes' && windForceX < -5) {
-      // Visible Andean wind streaks when Level 5 boss unleashes wind gusts
-      ctx.save();
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
-      ctx.lineWidth = 2.4;
-      const gustSpan = width + 220;
-      for (let i = 0; i < 16; i++) {
-        const gx = ((hash01(i * 13.9) * gustSpan - time * 980) % gustSpan + gustSpan) % gustSpan - 100;
-        const gy = height * (0.1 + hash01(i * 29.1) * 0.78);
-        ctx.beginPath();
-        ctx.moveTo(gx, gy);
-        ctx.lineTo(gx + 95, gy);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
+    drawSeamlessPanorama(ctx, curBg, width, height, time, playerY, baseSpeed);
+    drawLevelAtmosphereEffects(ctx, width, height, time, beatPulse, windForceX, landscape);
   } else {
     // Graceful procedural fallback while stage illustration loads
     const palA = EARTH_PALETTES[prevLandscape] ?? EARTH_PALETTES.pampa_dawn;
@@ -1273,11 +1133,11 @@ function drawEarthLevelBackdrop(ctx: CanvasRenderingContext2D, state: RenderStat
     }
   }
 
-  // Dynamic Evolving Atmosphere & Approaching Invasion Signals
+  // Crisp boss embers (no background ship or laser beams)
   drawInvasionSignals(ctx, state);
 
   // Crisp Horizontal Anime Flight Speed Lines (Right-to-Left)
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   for (let i = 0; i < 10; i++) {

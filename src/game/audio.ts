@@ -4,7 +4,7 @@ export const AUDIO_PREFS_STORAGE_KEY = 'dionaea_strike_audio_v1';
 
 export const MENU_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Men___Voz_AR__87d64c21.m4a';
 export const LEVEL_1_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Rap_AR__Voz_Argentina__5bdef878.m4a';
-export const LEVEL_2_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Nivel_2_Cumbia__Voz_AR__3aaf9dca.m4a';
+export const LEVEL_2_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Nivel_2_Cumbia_Villera.m4a';
 export const LEVEL_3_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Nivel_3_Boom_Bap__Voz_AR__7c61e348.m4a';
 export const LEVEL_4_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_level_4_1399cdc6.m4a';
 export const LEVEL_5_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Nivel_5_Boss__Voz_AR__2a892b6f.m4a';
@@ -20,6 +20,7 @@ export const LEVEL_MUSIC_TRACKS: Record<LevelNumber, string> = {
 export interface LevelRhythmProfile {
   bpm: number;
   firstDropSec: number;
+  startOffsetSec: number;
   beatsPerSpawn: number;
   trackDurationSec: number;
 }
@@ -29,11 +30,11 @@ export interface LevelRhythmProfile {
  * para sincronizar oleadas enemigas y pulso visual con la música de cada nivel.
  */
 export const LEVEL_RHYTHM_PROFILES: Record<LevelNumber, LevelRhythmProfile> = {
-  1: { bpm: 140, firstDropSec: 0.12, beatsPerSpawn: 2.0, trackDurationSec: 164.0 },
-  2: { bpm: 99, firstDropSec: 0.2, beatsPerSpawn: 1.5, trackDurationSec: 159.1 },
-  3: { bpm: 118, firstDropSec: 1.82, beatsPerSpawn: 1.5, trackDurationSec: 180.2 },
-  4: { bpm: 130, firstDropSec: 3.2, beatsPerSpawn: 1.5, trackDurationSec: 179.1 },
-  5: { bpm: 118, firstDropSec: 2.02, beatsPerSpawn: 1.0, trackDurationSec: 151.1 },
+  1: { bpm: 140, firstDropSec: 0.12, startOffsetSec: 0, beatsPerSpawn: 2.0, trackDurationSec: 164.0 },
+  2: { bpm: 96, firstDropSec: 2.0, startOffsetSec: 1.5, beatsPerSpawn: 1.5, trackDurationSec: 65.0 },
+  3: { bpm: 118, firstDropSec: 1.82, startOffsetSec: 1.35, beatsPerSpawn: 1.5, trackDurationSec: 180.2 },
+  4: { bpm: 130, firstDropSec: 3.2, startOffsetSec: 2.6, beatsPerSpawn: 1.5, trackDurationSec: 179.1 },
+  5: { bpm: 118, firstDropSec: 2.02, startOffsetSec: 1.5, beatsPerSpawn: 1.0, trackDurationSec: 151.1 },
 };
 
 export function getLevelRhythmProfile(levelIndex: LevelNumber): LevelRhythmProfile {
@@ -135,6 +136,7 @@ class AnimeSoundEngine {
   private currentLevel: LevelNumber = 1;
   private currentStatus: GameStatus = 'title';
   private musicAudio: HTMLAudioElement | null = null;
+  private trackCache = new Map<string, HTMLAudioElement>();
   private currentTrackSrc: string | null = null;
   private desiredTrackSrc: string | null = null;
   private musicShouldPlay = false;
@@ -150,11 +152,11 @@ class AnimeSoundEngine {
   }
 
   public setAssetBasePath(basePath?: string) {
-    if (!basePath || basePath === '/') {
-      this.assetBasePath = '';
-      return;
+    const nextBase = !basePath || basePath === '/' ? '' : basePath.replace(/\/+$/, '');
+    if (nextBase !== this.assetBasePath) {
+      this.assetBasePath = nextBase;
+      this.trackCache.clear();
     }
-    this.assetBasePath = basePath.replace(/\/+$/, '');
   }
 
   private resolveTrackUrl(trackPath: string): string {
@@ -162,6 +164,55 @@ class AnimeSoundEngine {
     if (!this.assetBasePath) return trackPath;
     const normalized = trackPath.startsWith('/') ? trackPath : `/${trackPath}`;
     return `${this.assetBasePath}${normalized}`;
+  }
+
+  private getOrCreateAudio(trackPath: string): HTMLAudioElement {
+    const cached = this.trackCache.get(trackPath);
+    if (cached) return cached;
+    const audio = new Audio(this.resolveTrackUrl(trackPath));
+    audio.loop = true;
+    audio.preload = 'auto';
+    this.trackCache.set(trackPath, audio);
+    return audio;
+  }
+
+  public preloadTrack(trackPath: string) {
+    if (typeof window === 'undefined' || typeof Audio === 'undefined') return;
+    const audio = this.getOrCreateAudio(trackPath);
+    if (audio.readyState === 0) {
+      audio.load();
+    }
+  }
+
+  public preloadGameAudio(levelIndex: LevelNumber = 1) {
+    if (typeof window === 'undefined' || typeof Audio === 'undefined') return;
+    this.preloadTrack(MENU_MUSIC_SRC);
+    const curTrack = LEVEL_MUSIC_TRACKS[levelIndex];
+    if (curTrack) this.preloadTrack(curTrack);
+    if (levelIndex < 5) {
+      const nextTrack = LEVEL_MUSIC_TRACKS[(levelIndex + 1) as LevelNumber];
+      if (nextTrack) this.preloadTrack(nextTrack);
+    }
+  }
+
+  private seekToStartOffset(audio: HTMLAudioElement, offsetSec: number) {
+    const target = Math.max(0, offsetSec);
+    const applySeek = () => {
+      try {
+        if (Number.isFinite(audio.duration) && audio.duration > target + 0.5) {
+          audio.currentTime = target;
+        } else if (!Number.isFinite(audio.duration) || audio.readyState >= 1) {
+          audio.currentTime = target;
+        }
+      } catch {
+        // Ignore seek error before metadata loads
+      }
+    };
+    if (audio.readyState >= 1) {
+      applySeek();
+    } else {
+      audio.addEventListener('loadedmetadata', applySeek, { once: true });
+    }
   }
 
   private persistAudioPrefs() {
@@ -197,9 +248,8 @@ class AnimeSoundEngine {
     this.persistAudioPrefs();
     if (this.musicAudio) {
       this.musicAudio.volume = this.getEffectiveMusicGain(this.currentStatus);
-      if (this.musicVolume <= 0.001) {
-        this.musicAudio.pause();
-      } else if (this.musicShouldPlay && !this.muted && this.musicAudio.paused) {
+      // Never pause playback when volume reaches 0; keep track advancing silently
+      if (this.musicShouldPlay && this.musicAudio.paused) {
         this.musicAudio.play().catch(() => {});
       }
     }
@@ -214,9 +264,8 @@ class AnimeSoundEngine {
     this.muted = muted;
     if (this.musicAudio) {
       this.musicAudio.muted = muted;
-      if (muted) {
-        this.musicAudio.pause();
-      } else if (this.musicShouldPlay && this.desiredTrackSrc && this.musicVolume > 0.001) {
+      // Keep track advancing silently even when muted
+      if (this.musicShouldPlay && this.desiredTrackSrc && this.musicAudio.paused) {
         this.musicAudio.play().catch(() => {});
       }
     }
@@ -226,12 +275,16 @@ class AnimeSoundEngine {
     return this.muted;
   }
 
+  public isMusicPlayingDesired(): boolean {
+    return this.musicShouldPlay;
+  }
+
   public setLevel(levelIndex: LevelNumber) {
     this.currentLevel = levelIndex;
   }
 
   public getMusicTimeSec(): number | null {
-    if (!this.musicAudio || this.musicAudio.paused || this.muted || this.musicVolume <= 0.001) {
+    if (!this.musicAudio || this.musicAudio.paused) {
       return null;
     }
     if (this.musicAudio.readyState >= 2 && Number.isFinite(this.musicAudio.currentTime)) {
@@ -267,13 +320,14 @@ class AnimeSoundEngine {
       return;
     }
 
+    const startOffset = status === 'title' ? 0 : getLevelRhythmProfile(levelIndex).startOffsetSec;
+
     if (!this.musicAudio || this.currentTrackSrc !== nextSrc) {
       this.stopMusic();
-      const audio = new Audio(this.resolveTrackUrl(nextSrc));
-      audio.loop = true;
-      audio.preload = 'auto';
+      const audio = this.getOrCreateAudio(nextSrc);
       audio.volume = this.getEffectiveMusicGain(status);
       audio.muted = this.muted;
+      this.seekToStartOffset(audio, startOffset);
       try {
         audio.playbackRate = status === 'title' ? 1.0 : this.musicPlaybackRate;
       } catch {
@@ -288,12 +342,12 @@ class AnimeSoundEngine {
     this.musicShouldPlay = status === 'playing' || status === 'title';
     this.musicAudio.muted = this.muted;
 
-    if (this.musicShouldPlay && !this.muted && this.musicVolume > 0.001) {
+    if (this.musicShouldPlay) {
       if (this.musicAudio.paused) {
         this.musicAudio.play().catch(() => {});
       }
     } else {
-      // On paused, keep currentTime intact so music resumes right on beat!
+      // On explicit game pause, keep currentTime intact so music resumes right on beat
       this.musicAudio.pause();
     }
   }
@@ -310,39 +364,34 @@ class AnimeSoundEngine {
     }
     this.desiredTrackSrc = src;
     this.musicShouldPlay = true;
+    const startOffset = getLevelRhythmProfile(levelIndex).startOffsetSec;
 
     if (!this.musicAudio || this.currentTrackSrc !== src) {
       this.stopMusic();
-      const audio = new Audio(this.resolveTrackUrl(src));
-      audio.loop = true;
-      audio.preload = 'auto';
+      const audio = this.getOrCreateAudio(src);
       audio.volume = this.getEffectiveMusicGain('playing');
+      this.seekToStartOffset(audio, startOffset);
       this.musicAudio = audio;
       this.currentTrackSrc = src;
     } else {
       this.musicAudio.volume = this.getEffectiveMusicGain('playing');
       try {
-        this.musicAudio.currentTime = 0;
-        this.musicAudio.playbackRate = 1.0;
+        audioPlaybackReset: {
+          this.musicAudio.playbackRate = 1.0;
+          break audioPlaybackReset;
+        }
       } catch {
-        // Ignore seek error before metadata loads
+        // Ignore playbackRate error
       }
+      this.seekToStartOffset(this.musicAudio, startOffset);
     }
 
     this.musicAudio.muted = this.muted;
-    if (!this.muted && this.musicVolume > 0.001) {
-      this.musicAudio.play().catch(() => {});
-    }
+    this.musicAudio.play().catch(() => {});
   }
 
   public unlockMusicOnGesture() {
-    if (
-      this.musicShouldPlay &&
-      !this.muted &&
-      this.musicVolume > 0.001 &&
-      this.musicAudio &&
-      this.musicAudio.paused
-    ) {
+    if (this.musicShouldPlay && this.musicAudio && this.musicAudio.paused) {
       this.musicAudio.play().catch(() => {});
     }
   }

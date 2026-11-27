@@ -99,6 +99,15 @@ export function CreatorIntroOverlay({
       cancelled = true;
       video.pause();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.volume = Math.max(0, Math.min(1, volume));
+    video.muted = initialMuted;
+    setIsMuted(initialMuted);
   }, [initialMuted, volume]);
 
   const handleToggleSound = useCallback(() => {

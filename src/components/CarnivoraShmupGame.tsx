@@ -285,7 +285,10 @@ export function CarnivoraShmupGame({
 
   useEffect(() => {
     soundEngine.syncMusic(status, hud.levelIndex);
-  }, [status, hud.levelIndex]);
+    if (status === 'level_clear') {
+      soundEngine.preloadGameAudio(hud.clearedLevelSummary?.nextLevel ?? hud.levelIndex);
+    }
+  }, [status, hud.levelIndex, hud.clearedLevelSummary?.nextLevel]);
 
   useEffect(() => {
     soundEngine.syncMusicTempo(status === 'playing' && hud.bossActive, hud.bossPhase);
@@ -541,6 +544,7 @@ export function CarnivoraShmupGame({
     if (!ctx) return;
 
     preloadStageBackgrounds();
+    soundEngine.preloadGameAudio(1);
 
     const sim = new GameSimulation(
       config,
@@ -973,10 +977,13 @@ export function CarnivoraShmupGame({
         />
       )}
 
-      {/* REWORKED TITLE SCREEN */}
+      {/* REWORKED TITLE SCREEN (Scroll-free responsive across short landscape phones, tablets & desktop) */}
       {status === 'title' && (
-        <div className="fixed inset-0 z-30 overflow-y-auto overscroll-contain">
-          <div className="relative min-h-full flex flex-col justify-between">
+        <div
+          data-testid="title-screen-container"
+          className="fixed inset-0 z-30 h-dvh overflow-hidden [@media(max-height:280px)]:overflow-y-auto overscroll-contain"
+        >
+          <div className="relative h-full min-h-0 flex flex-col justify-between">
             {!bgFailed ? (
               <img
                 src={titleHeroBg}
@@ -1002,7 +1009,7 @@ export function CarnivoraShmupGame({
 
             {/* Top Utility Bar: Xbox Detection Banner + Audio Toggle */}
             <div
-              className={`relative z-20 flex items-center justify-between gap-2 pt-[max(0.75rem,env(safe-area-inset-top))] px-[max(1rem,env(safe-area-inset-left))] sm:px-10 [@media(max-height:480px)]:pt-2 ${
+              className={`relative z-20 shrink-0 flex items-center justify-between gap-2 pt-[max(0.65rem,env(safe-area-inset-top))] [@media(max-height:540px)]:pt-[max(0.35rem,env(safe-area-inset-top))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] sm:px-10 ${
                 titleRevealFromIntro ? 'animate-title-stage-reveal' : ''
               }`}
             >
@@ -1010,7 +1017,7 @@ export function CarnivoraShmupGame({
                 {isXbox && (
                   <div
                     data-testid="title-xbox-banner"
-                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#0B2618]/95 border-2 border-[#107C10] shadow-[0_3px_0_#070D17] text-xs font-extrabold text-[#4ADE80]"
+                    className="inline-flex items-center gap-2 px-3 py-1 rounded-xl bg-[#0B2618]/95 border-2 border-[#107C10] shadow-[0_3px_0_#070D17] text-xs font-extrabold text-[#4ADE80]"
                   >
                     <Gamepad2 className="w-4 h-4 text-[#22C55E]" />
                     <span>Control Xbox Detectado</span>
@@ -1019,6 +1026,17 @@ export function CarnivoraShmupGame({
               </div>
 
               <div className="relative flex items-center gap-1.5">
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAdmin(true)}
+                    className="hidden [@media(max-height:540px)]:inline-flex touch-manipulation items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[#0F172A]/95 hover:bg-[#1E293B] text-slate-100 text-xs font-semibold border-2 border-[#0B1120] shadow-[0_3px_0_#0B1120] cursor-pointer"
+                  >
+                    <Settings2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Admin</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={() => {
@@ -1027,7 +1045,7 @@ export function CarnivoraShmupGame({
                   }}
                   aria-expanded={showAudioPopover}
                   aria-label="Abrir menú de volumen de música y efectos"
-                  className="hidden [@media(max-height:480px)]:inline-flex touch-manipulation items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#0F172A]/92 hover:bg-[#1E293B] text-slate-100 text-xs font-semibold border-2 border-[#0B1120] shadow-[0_3px_0_#0B1120] cursor-pointer"
+                  className="hidden [@media(max-height:540px)]:inline-flex touch-manipulation items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[#0F172A]/92 hover:bg-[#1E293B] text-slate-100 text-xs font-semibold border-2 border-[#0B1120] shadow-[0_3px_0_#0B1120] cursor-pointer"
                 >
                   <SlidersHorizontal className="w-3.5 h-3.5 text-sky-400" />
                   <span>Volumen</span>
@@ -1041,7 +1059,7 @@ export function CarnivoraShmupGame({
                   }}
                   aria-label={muted ? 'Activar música y sonido' : 'Silenciar música y sonido'}
                   title="Silenciar / Activar Audio (M)"
-                  className="touch-manipulation inline-flex items-center gap-1.5 px-3 py-1.5 sm:py-2 rounded-xl bg-[#0F172A]/92 hover:bg-[#1E293B] text-slate-100 text-xs font-semibold border-2 border-[#0B1120] shadow-[0_3px_0_#0B1120] cursor-pointer"
+                  className="touch-manipulation inline-flex items-center gap-1.5 px-3 py-1.5 [@media(max-height:540px)]:py-1 rounded-xl bg-[#0F172A]/92 hover:bg-[#1E293B] text-slate-100 text-xs font-semibold border-2 border-[#0B1120] shadow-[0_3px_0_#0B1120] cursor-pointer"
                 >
                   {muted ? (
                     <VolumeX className="w-4 h-4 text-rose-400" />
@@ -1056,7 +1074,7 @@ export function CarnivoraShmupGame({
                   <div
                     role="region"
                     aria-label="Mezclador de volumen rápido"
-                    className="hidden [@media(max-height:480px)]:block absolute right-0 top-10 w-60 p-3 rounded-xl bg-[#0B1422]/96 border-2 border-[#090D16] shadow-[0_6px_0_#090D16] space-y-2.5 z-30"
+                    className="hidden [@media(max-height:540px)]:block absolute right-0 top-9 w-60 p-3 rounded-xl bg-[#0B1422]/96 border-2 border-[#090D16] shadow-[0_6px_0_#090D16] space-y-2.5 z-30"
                   >
                     <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-200">
                       <div className="flex items-center justify-between">
@@ -1097,282 +1115,288 @@ export function CarnivoraShmupGame({
               </div>
             </div>
 
-            {/* Main Reworked Hero & Tactical Hangar Stage */}
+            {/* Main Reworked Hero & Tactical Hangar Stage (2-column compact on short landscape phones) */}
             <div
-              className={`relative z-10 w-full max-w-3xl pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] sm:px-10 lg:px-12 py-3 sm:py-4 [@media(max-height:480px)]:py-1.5 flex flex-col items-start gap-3 sm:gap-3.5 [@media(max-height:480px)]:gap-2 ${
+              className={`relative z-10 flex-1 min-h-0 flex items-center pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] sm:px-10 lg:px-12 py-2 [@media(max-height:540px)]:py-1 ${
                 titleRevealFromIntro ? 'animate-title-stage-reveal' : ''
               }`}
             >
-              {/* New Main Logo Emblem + Title Lockup */}
-              <div className="flex flex-col items-start gap-1.5">
-                <TitleLogoLockup title={config.gameTitle} />
-                <p className="text-xs sm:text-sm text-slate-100/95 font-medium max-w-xl leading-snug">
-                  Defiende los cielos de la Tierra con tu biplano carnívoro junto a{' '}
-                  <span className="font-extrabold text-amber-300">{selectedPetInfo.name}</span>, combina armas rotativas y derrota a los jefes al ritmo de cada nivel.
-                </p>
+              <div className="w-full max-w-3xl [@media(max-height:540px)]:max-w-5xl grid grid-cols-1 [@media(max-height:540px)]:grid-cols-[minmax(195px,0.82fr)_minmax(0,1.18fr)] gap-2.5 sm:gap-3 [@media(max-height:540px)]:gap-x-4 [@media(max-height:540px)]:gap-y-2 items-start [@media(max-height:540px)]:items-center">
+                {/* Block 1: Main Logo Emblem + Title + Global High Score */}
+                <div className="flex flex-col items-start gap-1 [@media(max-height:540px)]:gap-1 min-w-0">
+                  <TitleLogoLockup title={config.gameTitle} />
+                  <p className="text-xs sm:text-sm [@media(max-height:540px)]:text-[11px] [@media(max-height:540px)]:line-clamp-2 text-slate-100/95 font-medium max-w-xl leading-snug">
+                    Defiende los cielos de la Tierra con tu biplano carnívoro junto a{' '}
+                    <span className="font-extrabold text-amber-300">{selectedPetInfo.name}</span>, combina armas rotativas y derrota a los jefes al ritmo de cada nivel.
+                  </p>
 
-                {/* Global High Score Summary Line (Unboxed, Zero-Pill, Tabular) */}
-                <div
-                  data-testid="title-global-highscore"
-                  className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-0.5 text-xs text-slate-200"
-                >
-                  <div className="inline-flex items-baseline gap-1.5">
-                    <Trophy className="w-3.5 h-3.5 text-amber-400 self-center shrink-0" />
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
-                      Récord Global
-                    </span>
-                    <span
-                      data-testid="title-best-score-value"
-                      className="text-base sm:text-lg font-display font-black tabular-nums text-white"
-                    >
-                      {globalRecords.bestScore.toLocaleString('es-ES')}
-                    </span>
-                  </div>
-                  {globalRecords.bestScore > 0 && (
-                    <span className="text-[11px] text-slate-300 tabular-nums">
-                      Combo Máx. {globalRecords.bestCombo} · Niv. {globalRecords.highestLevel}/5
-                      {globalRecords.totalVictories > 0
-                        ? ` · ${globalRecords.totalVictories} ${globalRecords.totalVictories === 1 ? 'victoria' : 'victorias'}`
-                        : ''}
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    data-testid="open-records-btn"
-                    onClick={() => {
-                      setGlobalRecords(loadGlobalHighScoreState());
-                      setShowRecordsModal(true);
-                    }}
-                    className="touch-manipulation text-xs font-semibold text-sky-300 hover:text-sky-200 underline underline-offset-4 decoration-sky-400/60 hover:decoration-sky-300 cursor-pointer whitespace-nowrap"
+                  {/* Global High Score Summary Line */}
+                  <div
+                    data-testid="title-global-highscore"
+                    className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 pt-0.5 text-xs text-slate-200"
                   >
-                    Ver Récords
-                  </button>
-                </div>
-              </div>
-
-              {/* Reworked Co-Pilot Pet Hangar Deck */}
-              <div
-                data-testid="pet-hangar-panel"
-                className="w-full max-w-2xl rounded-2xl bg-[#091220]/90 border-2 border-[#050810] shadow-[0_6px_0_#050810] p-3 sm:p-3.5 [@media(max-height:480px)]:p-2 space-y-2.5 [@media(max-height:480px)]:space-y-1.5"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-                  <div className="text-[11px] font-display font-black uppercase tracking-wider text-sky-300">
-                    Hangar de Mascotas Copiloto
-                  </div>
-                  <div className="text-[10px] font-semibold text-slate-300 shrink-0">
-                    {isXbox ? (
-                      <span className="inline-flex items-center gap-1 text-emerald-300 font-bold whitespace-nowrap">
-                        <span className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-600 font-mono text-[9px] text-white whitespace-nowrap shrink-0">
-                          LB / RB
-                        </span>
-                        <span>Cambiar Mascota</span>
+                    <div className="inline-flex items-baseline gap-1.5">
+                      <Trophy className="w-3.5 h-3.5 text-amber-400 self-center shrink-0" />
+                      <span className="text-[11px] [@media(max-height:540px)]:text-[10px] font-bold uppercase tracking-wider text-amber-300">
+                        Récord Global
                       </span>
-                    ) : (
-                      <span>5 copilotos desbloqueables por nivel</span>
+                      <span
+                        data-testid="title-best-score-value"
+                        className="text-base sm:text-lg [@media(max-height:540px)]:text-sm font-display font-black tabular-nums text-white"
+                      >
+                        {globalRecords.bestScore.toLocaleString('es-ES')}
+                      </span>
+                    </div>
+                    {globalRecords.bestScore > 0 && (
+                      <span className="text-[11px] [@media(max-height:600px)]:hidden text-slate-300 tabular-nums">
+                        Combo Máx. {globalRecords.bestCombo} · Niv. {globalRecords.highestLevel}/5
+                        {globalRecords.totalVictories > 0
+                          ? ` · ${globalRecords.totalVictories} ${globalRecords.totalVictories === 1 ? 'victoria' : 'victorias'}`
+                          : ''}
+                      </span>
                     )}
+                    <button
+                      type="button"
+                      data-testid="open-records-btn"
+                      onClick={() => {
+                        setGlobalRecords(loadGlobalHighScoreState());
+                        setShowRecordsModal(true);
+                      }}
+                      className="touch-manipulation text-xs [@media(max-height:540px)]:text-[11px] font-semibold text-sky-300 hover:text-sky-200 underline underline-offset-4 decoration-sky-400/60 hover:decoration-sky-300 cursor-pointer whitespace-nowrap"
+                    >
+                      Ver Récords
+                    </button>
                   </div>
                 </div>
 
-                {/* Responsive Pet Selector Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 [@media(max-height:480px)]:grid-cols-3 gap-1.5 sm:gap-2 [@media(max-height:480px)]:gap-1.5">
-                  {PET_CATALOG.map((pet) => {
-                    const isPlayable =
-                      pet.implemented && (pet.id === 'batricio' || hud.unlockedPets.includes(pet.id as PetId));
-                    const isSelected = pet.implemented && hud.petId === pet.id;
+                {/* Block 2: Co-Pilot Pet Hangar Deck (occupies right column on short landscape screens) */}
+                <div
+                  data-testid="pet-hangar-panel"
+                  className="w-full max-w-2xl [@media(max-height:540px)]:row-span-2 rounded-2xl bg-[#091220]/90 border-2 border-[#050810] shadow-[0_6px_0_#050810] p-2.5 sm:p-3 [@media(max-height:540px)]:p-2 space-y-2 [@media(max-height:540px)]:space-y-1.5"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5">
+                    <div className="text-[11px] [@media(max-height:540px)]:text-[10px] font-display font-black uppercase tracking-wider text-sky-300">
+                      Hangar de Mascotas Copiloto
+                    </div>
+                    <div className="text-[10px] font-semibold text-slate-300 shrink-0">
+                      {isXbox ? (
+                        <span className="inline-flex items-center gap-1 text-emerald-300 font-bold whitespace-nowrap">
+                          <span className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-600 font-mono text-[9px] text-white whitespace-nowrap shrink-0">
+                            LB / RB
+                          </span>
+                          <span>Cambiar Mascota</span>
+                        </span>
+                      ) : (
+                        <span className="[@media(max-height:540px)]:hidden">5 copilotos desbloqueables por nivel</span>
+                      )}
+                    </div>
+                  </div>
 
-                    if (!pet.implemented) {
-                      return (
-                        <div
-                          key={pet.id}
-                          title={pet.specialDesc}
-                          className="overflow-hidden min-h-[46px] [@media(max-height:480px)]:min-h-[38px] flex items-center gap-2 px-2.5 py-1.5 [@media(max-height:480px)]:py-1 rounded-xl bg-[#0B1525] border border-slate-800 text-slate-400"
-                        >
-                          <div className="w-5 h-5 rounded-md bg-slate-900 border border-slate-700/80 flex items-center justify-center shrink-0">
-                            <Lock className="w-3 h-3 text-slate-400" />
-                          </div>
-                          <div className="min-w-0 leading-tight">
-                            <div className="text-[11px] font-bold truncate">Próxima Mascota</div>
-                            <div className="text-[9px] text-slate-400 truncate">Jefe Nv.{pet.unlockLevel}</div>
-                          </div>
-                        </div>
-                      );
-                    }
+                  {/* Responsive Pet Selector Grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 [@media(max-height:540px)]:grid-cols-3 gap-1.5 sm:gap-2 [@media(max-height:540px)]:gap-1.5">
+                    {PET_CATALOG.map((pet) => {
+                      const isPlayable =
+                        pet.implemented && (pet.id === 'batricio' || hud.unlockedPets.includes(pet.id as PetId));
+                      const isSelected = pet.implemented && hud.petId === pet.id;
 
-                    return (
-                      <button
-                        key={pet.id}
-                        type="button"
-                        disabled={!isPlayable}
-                        onClick={() => isPlayable && handleSelectPet(pet.id as PetId)}
-                        title={
-                          isPlayable
-                            ? `${pet.name} · Cerca: ${pet.closeRangeLabel} · Especial: ${pet.specialName}`
-                            : `Derrota al Jefe del Nivel ${pet.unlockLevel} para desbloquear a ${pet.name}`
-                        }
-                        className={`touch-manipulation overflow-hidden min-h-[46px] [@media(max-height:480px)]:min-h-[38px] flex items-center gap-2 px-2.5 py-1.5 [@media(max-height:480px)]:py-1 rounded-xl border-2 text-left transition-colors ${
-                          isSelected
-                            ? 'bg-[#122840] border-sky-400 text-white shadow-[0_3px_0_#050810] cursor-pointer'
-                            : isPlayable
-                            ? 'bg-[#0C1829] border-[#050810] hover:border-slate-500 text-slate-100 cursor-pointer'
-                            : 'bg-[#0B1525] border-[#050810] text-slate-400 cursor-not-allowed'
-                        }`}
-                      >
-                        <div className="shrink-0">
-                          {isPlayable ? (
-                            <PetEmblem petId={pet.id as PetId} size={22} />
-                          ) : (
-                            <div className="w-5 h-5 rounded-md bg-slate-900 border border-slate-700/80 flex items-center justify-center">
+                      if (!pet.implemented) {
+                        return (
+                          <div
+                            key={pet.id}
+                            title={pet.specialDesc}
+                            className="overflow-hidden min-h-[44px] [@media(max-height:540px)]:min-h-[36px] flex items-center gap-1.5 sm:gap-2 px-2 py-1 rounded-xl bg-[#0B1525] border border-slate-800 text-slate-400"
+                          >
+                            <div className="w-5 h-5 rounded-md bg-slate-900 border border-slate-700/80 flex items-center justify-center shrink-0">
                               <Lock className="w-3 h-3 text-slate-400" />
                             </div>
-                          )}
-                        </div>
-                        <div className="min-w-0 flex-1 leading-tight">
-                          <div className="text-[11px] sm:text-xs font-extrabold flex items-center gap-1 truncate">
-                            <span className="truncate">{pet.name}</span>
-                            {isSelected && <Check className="w-3 h-3 text-sky-400 shrink-0" />}
+                            <div className="min-w-0 leading-tight">
+                              <div className="text-[11px] [@media(max-height:540px)]:text-[10px] font-bold truncate">
+                                Próxima Mascota
+                              </div>
+                              <div className="text-[9px] text-slate-400 truncate">Jefe Nv.{pet.unlockLevel}</div>
+                            </div>
                           </div>
-                          <div className="text-[9px] sm:text-[10px] text-slate-300 truncate">
-                            {isPlayable ? pet.specialName : `Jefe Nv.${pet.unlockLevel}`}
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Active Pet Combat Briefing Strip */}
-                <div className="[@media(max-height:480px)]:hidden rounded-xl bg-[#0D1A2C] border border-slate-700/70 px-3 py-2 grid grid-cols-1 sm:grid-cols-2 gap-1.5 sm:gap-3 text-[11px]">
-                  <div className="flex items-start gap-1.5 min-w-0">
-                    <Shield className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                    <div className="leading-snug min-w-0">
-                      <span className="font-bold text-emerald-300">Cerca: </span>
-                      <span className="text-slate-100">{selectedPetInfo.closeRangeLabel}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-1.5 min-w-0">
-                    <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
-                    <div className="leading-snug min-w-0">
-                      <span className="font-bold text-amber-300">
-                        Especial [{prompts.specialShort}]:{' '}
-                      </span>
-                      <span className="text-slate-100">{selectedPetInfo.specialDesc}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Primary CTA + Compact Audio Mixer Row */}
-              <div className="w-full max-w-2xl flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2.5 sm:gap-3">
-                <button
-                  type="button"
-                  data-start="true"
-                  onClick={handleStart}
-                  className="touch-manipulation w-full sm:w-auto min-h-[48px] inline-flex items-center justify-center gap-2.5 px-6 py-3 sm:px-7 sm:py-3.5 [@media(max-height:480px)]:min-h-[40px] [@media(max-height:480px)]:px-5 [@media(max-height:480px)]:py-2 rounded-xl bg-[#E11D48] hover:bg-[#BE123C] text-white font-display font-black text-sm sm:text-base tracking-wide border-2 border-[#050810] shadow-[0_4px_0_#050810] active:translate-y-0.5 transition-transform cursor-pointer whitespace-nowrap"
-                >
-                  {isXbox && (
-                    <span className="w-5 h-5 rounded-full bg-[#107C10] border border-emerald-200 text-[11px] font-mono font-black inline-flex items-center justify-center shadow-inner">
-                      A
-                    </span>
-                  )}
-                  <span>Iniciar Misión</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-
-                {isAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => setShowAdmin(true)}
-                    className="touch-manipulation inline-flex items-center gap-2 px-4 py-3 sm:py-3.5 rounded-xl bg-[#0F172A]/95 hover:bg-[#1E293B] text-slate-100 font-semibold text-xs sm:text-sm border-2 border-[#050810] shadow-[0_4px_0_#050810] transition-colors cursor-pointer whitespace-nowrap"
-                  >
-                    <Settings2 className="w-4 h-4 text-emerald-400" />
-                    <span>Administrar</span>
-                  </button>
-                )}
-
-                {/* Compact Inline Audio Mixer (Música & Efectos) */}
-                <div
-                  data-testid="startup-volume-menu"
-                  className="flex-1 min-w-[230px] [@media(max-height:480px)]:hidden rounded-xl bg-[#091220]/90 border-2 border-[#050810] shadow-[0_4px_0_#050810] px-3 py-2 grid grid-cols-2 gap-3"
-                >
-                  <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-200">
-                    <div className="flex items-center justify-between gap-1">
-                      <span className="inline-flex items-center gap-1 text-sky-300">
-                        <Music className="w-3 h-3 shrink-0" />
-                        <span>Música</span>
-                      </span>
-                      <span className="font-mono text-[10px] tabular-nums text-white">
-                        {Math.round(musicVolume * 100)}%
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      aria-label="Volumen de música"
-                      min={0}
-                      max={100}
-                      value={Math.round(musicVolume * 100)}
-                      onChange={(e) => handleMusicVolumeChange(Number(e.target.value) / 100)}
-                      className="w-full h-1.5 accent-sky-400 cursor-pointer"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-200">
-                    <div className="flex items-center justify-between gap-1">
-                      <span className="inline-flex items-center gap-1 text-emerald-300">
-                        <Sparkles className="w-3 h-3 shrink-0" />
-                        <span>Efectos</span>
-                      </span>
-                      <span className="font-mono text-[10px] tabular-nums text-white">
-                        {Math.round(sfxVolume * 100)}%
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      aria-label="Volumen de efectos"
-                      min={0}
-                      max={100}
-                      value={Math.round(sfxVolume * 100)}
-                      onChange={(e) => handleSfxVolumeChange(Number(e.target.value) / 100)}
-                      onPointerUp={() => soundEngine.playUiSfxPreview()}
-                      onKeyUp={() => soundEngine.playUiSfxPreview()}
-                      className="w-full h-1.5 accent-emerald-400 cursor-pointer"
-                    />
-                  </label>
-                </div>
-              </div>
-
-              {/* Unboxed Carnivorous Arsenal Strip */}
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] [@media(max-height:480px)]:hidden text-slate-200">
-                {ALL_SPECIES_IDS.filter((id) => id === 'dionaea' || config.species[id].enabled).map((id) => {
-                  const sp = config.species[id];
-                  const isUnlocked = unlockedSet.has(id);
-                  return (
-                    <div
-                      key={id}
-                      title={
-                        isUnlocked
-                          ? `${sp.name}: ${sp.roleLabel}`
-                          : `Vence al Jefe del Nivel ${sp.unlockRequirementLevel} para desbloquear ${sp.name}`
+                        );
                       }
-                      className={`inline-flex items-center gap-1 ${isUnlocked ? '' : 'opacity-55'}`}
-                    >
-                      {isUnlocked ? (
-                        <SpeciesEmblem speciesId={id} color={sp.accentColor} unlocked={true} size={13} />
-                      ) : (
-                        <Lock className="w-3 h-3 text-slate-400" />
-                      )}
-                      <span className={`font-semibold ${isUnlocked ? 'text-white' : 'text-slate-400'}`}>
-                        {sp.name}
-                      </span>
+
+                      return (
+                        <button
+                          key={pet.id}
+                          type="button"
+                          disabled={!isPlayable}
+                          onClick={() => isPlayable && handleSelectPet(pet.id as PetId)}
+                          title={
+                            isPlayable
+                              ? `${pet.name} · Cerca: ${pet.closeRangeLabel} · Especial: ${pet.specialName}`
+                              : `Derrota al Jefe del Nivel ${pet.unlockLevel} para desbloquear a ${pet.name}`
+                          }
+                          className={`touch-manipulation overflow-hidden min-h-[44px] [@media(max-height:540px)]:min-h-[36px] flex items-center gap-1.5 sm:gap-2 px-2 py-1 rounded-xl border-2 text-left transition-colors ${
+                            isSelected
+                              ? 'bg-[#122840] border-sky-400 text-white shadow-[0_3px_0_#050810] cursor-pointer'
+                              : isPlayable
+                              ? 'bg-[#0C1829] border-[#050810] hover:border-slate-500 text-slate-100 cursor-pointer'
+                              : 'bg-[#0B1525] border-[#050810] text-slate-400 cursor-not-allowed'
+                          }`}
+                        >
+                          <div className="shrink-0">
+                            {isPlayable ? (
+                              <PetEmblem petId={pet.id as PetId} size={20} />
+                            ) : (
+                              <div className="w-5 h-5 rounded-md bg-slate-900 border border-slate-700/80 flex items-center justify-center">
+                                <Lock className="w-3 h-3 text-slate-400" />
+                              </div>
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1 leading-tight">
+                            <div className="text-[11px] [@media(max-height:540px)]:text-[10px] font-extrabold flex items-center gap-1 truncate">
+                              <span className="truncate">{pet.name}</span>
+                              {isSelected && <Check className="w-3 h-3 text-sky-400 shrink-0" />}
+                            </div>
+                            <div className="text-[9px] text-slate-300 truncate">
+                              {isPlayable ? pet.specialName : `Jefe Nv.${pet.unlockLevel}`}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Active Pet Combat Briefing Strip */}
+                  <div className="[@media(max-height:600px)]:hidden rounded-xl bg-[#0D1A2C] border border-slate-700/70 px-3 py-1.5 grid grid-cols-1 sm:grid-cols-2 gap-1.5 sm:gap-3 text-[11px]">
+                    <div className="flex items-start gap-1.5 min-w-0">
+                      <Shield className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                      <div className="leading-snug min-w-0">
+                        <span className="font-bold text-emerald-300">Cerca: </span>
+                        <span className="text-slate-100">{selectedPetInfo.closeRangeLabel}</span>
+                      </div>
                     </div>
-                  );
-                })}
+                    <div className="flex items-start gap-1.5 min-w-0">
+                      <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                      <div className="leading-snug min-w-0">
+                        <span className="font-bold text-amber-300">
+                          Especial [{prompts.specialShort}]:{' '}
+                        </span>
+                        <span className="text-slate-100">{selectedPetInfo.specialDesc}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Block 3: Primary CTA + Compact Audio Mixer + Arsenal */}
+                <div className="w-full max-w-2xl flex flex-col gap-2">
+                  <div className="w-full flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2.5">
+                    <button
+                      type="button"
+                      data-start="true"
+                      onClick={handleStart}
+                      className="touch-manipulation w-full sm:w-auto [@media(max-height:540px)]:w-full min-h-[46px] [@media(max-height:540px)]:min-h-[42px] inline-flex items-center justify-center gap-2.5 px-6 py-2.5 [@media(max-height:540px)]:py-2 rounded-xl bg-[#E11D48] hover:bg-[#BE123C] text-white font-display font-black text-sm sm:text-base tracking-wide border-2 border-[#050810] shadow-[0_4px_0_#050810] active:translate-y-0.5 transition-transform cursor-pointer whitespace-nowrap"
+                    >
+                      {isXbox && (
+                        <span className="w-5 h-5 rounded-full bg-[#107C10] border border-emerald-200 text-[11px] font-mono font-black inline-flex items-center justify-center shadow-inner">
+                          A
+                        </span>
+                      )}
+                      <span>Iniciar Misión</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
+
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAdmin(true)}
+                        className="[@media(max-height:540px)]:hidden touch-manipulation inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#0F172A]/95 hover:bg-[#1E293B] text-slate-100 font-semibold text-xs sm:text-sm border-2 border-[#050810] shadow-[0_4px_0_#050810] transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        <Settings2 className="w-4 h-4 text-emerald-400" />
+                        <span>Administrar</span>
+                      </button>
+                    )}
+
+                    {/* Compact Inline Audio Mixer (Música & Efectos) */}
+                    <div
+                      data-testid="startup-volume-menu"
+                      className="flex-1 min-w-[230px] [@media(max-height:540px)]:hidden rounded-xl bg-[#091220]/90 border-2 border-[#050810] shadow-[0_4px_0_#050810] px-3 py-2 grid grid-cols-2 gap-3"
+                    >
+                      <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-200">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="inline-flex items-center gap-1 text-sky-300">
+                            <Music className="w-3 h-3 shrink-0" />
+                            <span>Música</span>
+                          </span>
+                          <span className="font-mono text-[10px] tabular-nums text-white">
+                            {Math.round(musicVolume * 100)}%
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          aria-label="Volumen de música"
+                          min={0}
+                          max={100}
+                          value={Math.round(musicVolume * 100)}
+                          onChange={(e) => handleMusicVolumeChange(Number(e.target.value) / 100)}
+                          className="w-full h-1.5 accent-sky-400 cursor-pointer"
+                        />
+                      </label>
+
+                      <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-200">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="inline-flex items-center gap-1 text-emerald-300">
+                            <Sparkles className="w-3 h-3 shrink-0" />
+                            <span>Efectos</span>
+                          </span>
+                          <span className="font-mono text-[10px] tabular-nums text-white">
+                            {Math.round(sfxVolume * 100)}%
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          aria-label="Volumen de efectos"
+                          min={0}
+                          max={100}
+                          value={Math.round(sfxVolume * 100)}
+                          onChange={(e) => handleSfxVolumeChange(Number(e.target.value) / 100)}
+                          onPointerUp={() => soundEngine.playUiSfxPreview()}
+                          onKeyUp={() => soundEngine.playUiSfxPreview()}
+                          className="w-full h-1.5 accent-emerald-400 cursor-pointer"
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Unboxed Carnivorous Arsenal Strip */}
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] [@media(max-height:540px)]:hidden text-slate-200">
+                    {ALL_SPECIES_IDS.filter((id) => id === 'dionaea' || config.species[id].enabled).map((id) => {
+                      const sp = config.species[id];
+                      const isUnlocked = unlockedSet.has(id);
+                      return (
+                        <div
+                          key={id}
+                          title={
+                            isUnlocked
+                              ? `${sp.name}: ${sp.roleLabel}`
+                              : `Vence al Jefe del Nivel ${sp.unlockRequirementLevel} para desbloquear ${sp.name}`
+                          }
+                          className={`inline-flex items-center gap-1 ${isUnlocked ? '' : 'opacity-55'}`}
+                        >
+                          {isUnlocked ? (
+                            <SpeciesEmblem speciesId={id} color={sp.accentColor} unlocked={true} size={13} />
+                          ) : (
+                            <Lock className="w-3 h-3 text-slate-400" />
+                          )}
+                          <span className={`font-semibold ${isUnlocked ? 'text-white' : 'text-slate-400'}`}>
+                            {sp.name}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             </div>
 
             {/* Dynamic Control Guide Footer: Keyboard/Touch OR Full Xbox Controller Bar */}
             <div
               data-testid="title-controls-bar"
-              className="relative z-10 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] sm:px-10 lg:px-12 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-1.5"
+              className="relative z-10 shrink-0 pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] sm:px-10 lg:px-12 pb-[max(0.55rem,env(safe-area-inset-bottom))] [@media(max-height:540px)]:pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-1"
             >
               {isXbox ? (
                 <div className="inline-flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-1.5 rounded-xl bg-[#081512]/92 border border-[#107C10]/80 text-[11px] font-semibold text-slate-100">

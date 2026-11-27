@@ -490,7 +490,9 @@ export class GameSimulation {
     this.clearedLevelSummary = null;
     const nextWave = this.config.waves[this.waveIndex];
     if (nextWave) {
-      this.transitionLandscape(nextWave.landscape);
+      this.prevLandscape = nextWave.landscape;
+      this.currentLandscape = nextWave.landscape;
+      this.landscapeBlend = 1;
     }
     this.spawnTimer = 0.75;
     this.waveTimer = 0;
