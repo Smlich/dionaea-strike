@@ -2,8 +2,10 @@ node_modules/
 build/
 dist/
 dev-dist/
+release/
 coverage/
 .aistudio/
+.playwright-cli/
 *.tsbuildinfo
 .DS_Store
 *.log

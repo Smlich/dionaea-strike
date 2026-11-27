@@ -1,5 +1,12 @@
 import { getLevelRhythmProfile, soundEngine } from './audio';
 import {
+  computeDifficultySpawnTiming,
+  computeDynamicEscalation,
+  loadDifficulty,
+  saveDifficulty,
+  type DynamicEscalationSnapshot,
+} from './difficulty';
+import {
   advanceMutagenPodByShot,
   applyMutagenPickup,
   applyPalitoHeartCharm,
@@ -46,6 +53,18 @@ import {
 } from './gameConfig';
 import { recordRunPerformance, syncLiveHighScore } from './highScoreStore';
 import {
+  PARTICLE_POOL_SIZE,
+  clearParticlePool,
+  createParticlePool,
+  emitBulletImpactParticles,
+  emitEnemyExplosionParticles,
+  emitGenericBurstParticles,
+  emitPlayerHitParticles,
+  getExplosionTierForArchetype,
+  stepParticlePool,
+  type ParticlePool,
+} from './particles';
+import {
   renderGameFrame,
   type AcidPool,
   type BossState,
@@ -54,16 +73,26 @@ import {
   type InfernalRiderUnit,
   type MafiaCatUnit,
   type MutagenPod,
-  type Particle,
   type PlayerBullet,
   type PoisonFrogUnit,
   type RenderState,
   type VacuumVortex,
 } from './renderer';
+import {
+  addScreenShakeTrauma,
+  createScreenShakeState,
+  resetScreenShakeState,
+  sampleScreenShake,
+  stepScreenShake,
+  triggerBossHitShake,
+  triggerPlayerDamageShake,
+  type ScreenShakeState,
+} from './screenShake';
 import type {
   BossConfig,
   ClearedLevelSummary,
   ComboMilestoneAnnouncement,
+  DifficultyId,
   EnemyArchetypeId,
   FusedLoadout,
   GameConfig,
@@ -99,9 +128,12 @@ function createInitialSpeciesLevels(): SpeciesLevels {
   };
 }
 
-const PARTICLE_POOL_SIZE = 280;
 const PLAYER_BULLET_POOL_SIZE = 240;
 const ENEMY_BULLET_POOL_SIZE = 180;
+const MAX_ACID_POOLS = 10;
+const MAX_CALLOUTS = 12;
+const LIVE_SCORE_PERSIST_INTERVAL_SEC = 3.0;
+const HUD_EMIT_INTERVAL_SEC = 0.1;
 
 export class GameSimulation {
   private config: GameConfig;
@@ -111,7 +143,17 @@ export class GameSimulation {
 
   private time = 0;
   private hitstopTimer = 0;
-  private trauma = 0;
+  private killHitstopCooldown = 0;
+  private lastLivePersistTimeSec = -LIVE_SCORE_PERSIST_INTERVAL_SEC;
+  private cachedLevelWavesLevel = -1;
+  private cachedLevelWaves: GameConfig['waves'] = [];
+  private shakeState: ScreenShakeState = createScreenShakeState();
+  private reducedMotion =
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      : false;
+  private difficulty: DifficultyId = loadDifficulty();
+  private escalation: DynamicEscalationSnapshot = computeDynamicEscalation(0, 0, this.difficulty);
 
   // Player state (Horizontal side-scroller: left side facing right)
   private playerX = 160;
@@ -236,8 +278,7 @@ export class GameSimulation {
   // Pools & active entities
   private playerBullets: PlayerBullet[];
   private enemyBullets: EnemyBullet[];
-  private particles: Particle[];
-  private particleCursor = 0;
+  private particlePool: ParticlePool = createParticlePool(PARTICLE_POOL_SIZE);
   private enemies: SimEnemyState[] = [];
   private acidPools: AcidPool[] = [];
   private vortexes: VacuumVortex[] = [];
@@ -322,19 +363,6 @@ export class GameSimulation {
       age: 0,
     }));
 
-    this.particles = Array.from({ length: PARTICLE_POOL_SIZE }, () => ({
-      active: false,
-      x: 0,
-      y: 0,
-      vx: 0,
-      vy: 0,
-      life: 0,
-      maxLife: 1,
-      size: 4,
-      color: '#FFFFFF',
-      outlined: false,
-    }));
-
     this.boss = this.createEmptyBoss(1, false);
     this.resetRunState();
   }
@@ -386,9 +414,25 @@ export class GameSimulation {
   public setConfig(config: GameConfig) {
     this.config = config;
     this.cachedLoadout = null;
+    this.cachedLevelWavesLevel = -1;
     this.maxHp = config.player.maxHp;
     this.hp = Math.min(this.hp, this.maxHp);
     this.emitHud();
+  }
+
+  private getLevelWaves(level: LevelNumber): GameConfig['waves'] {
+    if (this.cachedLevelWavesLevel !== level) {
+      this.cachedLevelWavesLevel = level;
+      this.cachedLevelWaves = this.config.waves.filter((w) => w.level === level);
+    }
+    return this.cachedLevelWaves;
+  }
+
+  private pushAcidPool(pool: AcidPool) {
+    if (this.acidPools.length >= MAX_ACID_POOLS) {
+      this.acidPools.shift();
+    }
+    this.acidPools.push(pool);
   }
 
   public resize(width: number, height: number) {
@@ -416,6 +460,20 @@ export class GameSimulation {
     return this.levelIndex;
   }
 
+  public getDifficulty(): DifficultyId {
+    return this.difficulty;
+  }
+
+  public setDifficulty(next: DifficultyId) {
+    this.difficulty = saveDifficulty(next);
+    this.escalation = computeDynamicEscalation(this.score, this.elapsedSec, this.difficulty);
+    this.emitHud();
+  }
+
+  public getDynamicEscalation(): DynamicEscalationSnapshot {
+    return { ...this.escalation };
+  }
+
   public getPlayerPosition(): { x: number; y: number } {
     return { x: this.playerX, y: this.playerY };
   }
@@ -432,6 +490,9 @@ export class GameSimulation {
 
   public setStatus(next: GameStatus) {
     this.status = next;
+    if (next !== 'playing') {
+      this.checkLiveHighScoreProgress(true);
+    }
     this.onStatusChange(next);
     this.emitHud();
   }
@@ -448,7 +509,7 @@ export class GameSimulation {
     this.emitHud();
   }
 
-  private checkLiveHighScoreProgress() {
+  private checkLiveHighScoreProgress(forcePersist = false) {
     const rounded = Math.round(this.score);
     if (rounded > this.highScore) {
       this.highScore = rounded;
@@ -466,11 +527,15 @@ export class GameSimulation {
           maxLife: 1.6,
         });
       }
-      if (rounded > this.lastPersistedLiveScore) {
-        const res = syncLiveHighScore(rounded, this.maxCombo, this.levelIndex);
-        this.highScore = res.bestScore;
-        this.lastPersistedLiveScore = res.bestScore;
-      }
+    }
+    if (
+      rounded > this.lastPersistedLiveScore &&
+      (forcePersist || this.time - this.lastLivePersistTimeSec >= LIVE_SCORE_PERSIST_INTERVAL_SEC)
+    ) {
+      const res = syncLiveHighScore(rounded, this.maxCombo, this.levelIndex);
+      this.highScore = res.bestScore;
+      this.lastPersistedLiveScore = res.bestScore;
+      this.lastLivePersistTimeSec = this.time;
     }
   }
 
@@ -514,15 +579,39 @@ export class GameSimulation {
     this.emitHud();
   }
 
-  public continueToNextLevel() {
-    if (this.status !== 'level_clear') return;
+  public continueToNextLevel(): boolean {
+    if (this.status !== 'level_clear') return false;
     this.clearedLevelSummary = null;
+
+    // Guarantee waveIndex points to the first wave of the destination level
+    const firstWaveForLevel = this.config.waves.findIndex((w) => w.level === this.levelIndex);
+    if (firstWaveForLevel >= 0) {
+      this.waveIndex = firstWaveForLevel;
+    }
+
     const nextWave = this.config.waves[this.waveIndex];
     if (nextWave) {
       this.prevLandscape = nextWave.landscape;
       this.currentLandscape = nextWave.landscape;
       this.landscapeBlend = 1;
     }
+
+    // Hard reset transient combat entities & timers so nothing leaks across levels
+    this.boss = this.createEmptyBoss(this.levelIndex, false);
+    this.enemies = [];
+    this.acidPools = [];
+    this.vortexes = [];
+    this.pickups = [];
+    this.callouts = [];
+    for (const b of this.playerBullets) b.active = false;
+    for (const eb of this.enemyBullets) eb.active = false;
+    clearParticlePool(this.particlePool);
+    resetScreenShakeState(this.shakeState);
+    this.hitstopTimer = 0;
+    this.defeatBeatTimer = 0;
+    this.pendingBossClearResult = null;
+    this.hp = Math.max(1, this.hp);
+
     this.spawnTimer = 0.75;
     this.waveTimer = 0;
     this.waveSpawnedMutagen = false;
@@ -576,11 +665,14 @@ export class GameSimulation {
       ttl: 2.8,
     };
     this.setStatus('playing');
+    return true;
   }
 
   public resetRunState() {
     this.hitstopTimer = 0;
-    this.trauma = 0;
+    this.killHitstopCooldown = 0;
+    this.lastLivePersistTimeSec = -LIVE_SCORE_PERSIST_INTERVAL_SEC;
+    resetScreenShakeState(this.shakeState);
     this.cachedLoadout = null;
     this.superSaiyanAnnounced = false;
     this.portal = null;
@@ -652,6 +744,7 @@ export class GameSimulation {
     this.damageTaken = 0;
     this.elapsedSec = 0;
     this.defeatBeatTimer = 0;
+    this.escalation = computeDynamicEscalation(0, 0, this.difficulty);
 
     const firstLand = this.config.waves[0]?.landscape ?? 'pampa_dawn';
     this.currentLandscape = firstLand;
@@ -698,7 +791,7 @@ export class GameSimulation {
 
     for (const b of this.playerBullets) b.active = false;
     for (const eb of this.enemyBullets) eb.active = false;
-    for (const pt of this.particles) pt.active = false;
+    clearParticlePool(this.particlePool);
     this.clearInputs();
   }
 
@@ -778,7 +871,7 @@ export class GameSimulation {
     this.heroRecoil = 1;
     this.playerScaleX = 0.88;
     this.playerScaleY = 1.12;
-    this.trauma = Math.min(1, this.trauma + 0.24);
+    addScreenShakeTrauma(this.shakeState, 0.24);
     soundEngine.playSecondaryFire(this.secondarySpecies);
 
     this.spawnBurst(this.playerX + 34, this.playerY, spColor, isApexFusion ? 16 : 10, 185, true);
@@ -841,7 +934,7 @@ export class GameSimulation {
     if (this.selectedPet === 'roy') {
       this.royScreamTimer = 0.72;
       this.royScreamRadius = 56;
-      this.trauma = Math.min(1, this.trauma + 0.58);
+      addScreenShakeTrauma(this.shakeState, 0.58);
       soundEngine.playRoyHorridScream();
 
       for (const eb of this.enemyBullets) {
@@ -871,6 +964,12 @@ export class GameSimulation {
       if (this.boss.active && this.boss.dyingTimer <= 0 && profile.bossDamage > 0) {
         this.boss.hp -= profile.bossDamage;
         this.boss.hitFlashTimer = 0.08;
+        triggerBossHitShake(this.shakeState, {
+          damage: profile.bossDamage,
+          heavy: true,
+          impactDirX: this.boss.x - this.frog.x,
+          impactDirY: this.boss.y - this.frog.y,
+        });
         this.spawnBurst(this.boss.x - 24, this.boss.y, '#FDE047', 10, 200, true);
       }
 
@@ -885,7 +984,7 @@ export class GameSimulation {
       });
     } else if (this.selectedPet === 'sicario') {
       // Sicario summons the Mafia Gatuna: 4 gangster tabby cats stay on screen for ~4.8s
-      this.trauma = Math.min(1, this.trauma + 0.46);
+      addScreenShakeTrauma(this.shakeState, 0.46);
       soundEngine.playSicarioMafiaCall();
 
       for (const eb of this.enemyBullets) {
@@ -948,7 +1047,7 @@ export class GameSimulation {
       this.palitoLoveTimer = 0.85;
       this.palitoLoveRadius = 36;
       this.palitoCharmActiveTimer = profile.durationSec;
-      this.trauma = Math.min(1, this.trauma + 0.35);
+      addScreenShakeTrauma(this.shakeState, 0.35);
       soundEngine.playPalitoCharmWave();
 
       for (const eb of this.enemyBullets) {
@@ -978,6 +1077,12 @@ export class GameSimulation {
         this.boss.hp -= profile.bossDamage;
         this.boss.hitFlashTimer = 0.08;
         this.boss.fireTimer = Math.max(this.boss.fireTimer, 2.2);
+        triggerBossHitShake(this.shakeState, {
+          damage: profile.bossDamage,
+          heavy: true,
+          impactDirX: this.boss.x - this.frog.x,
+          impactDirY: this.boss.y - this.frog.y,
+        });
         this.spawnBurst(this.boss.x - 20, this.boss.y, '#F472B6', 10, 175, true);
       }
 
@@ -993,7 +1098,7 @@ export class GameSimulation {
     } else if (this.selectedPet === 'carpincho') {
       // CARPINCHO MATERO: Los Infernales a Caballo leaping from bottom-left to a long ¡SAPUCAAAAAAIIII!!
       this.sapucaiCryTimer = 2.45;
-      this.trauma = Math.min(1, this.trauma + 0.56);
+      addScreenShakeTrauma(this.shakeState, 0.56);
       soundEngine.playSapucaiCry();
 
       for (const eb of this.enemyBullets) {
@@ -1044,7 +1149,7 @@ export class GameSimulation {
       this.batricioRainPending = profile.squadSize;
       this.batricioRainTimer = 0.04;
       this.batricioRainDamage = profile.enemyDamage;
-      this.trauma = Math.min(1, this.trauma + 0.42);
+      addScreenShakeTrauma(this.shakeState, 0.42);
       soundEngine.playBatricioMatingCall();
 
       let cleared = 0;
@@ -1084,7 +1189,8 @@ export class GameSimulation {
   }
 
   public step(rawDt: number) {
-    const dt = Math.min(rawDt, 0.05);
+    const dt = Number.isFinite(rawDt) && rawDt > 0 ? Math.min(rawDt, 0.05) : 0;
+    if (dt <= 0) return;
     this.time += dt;
 
     if (this.status !== 'playing') return;
@@ -1093,19 +1199,25 @@ export class GameSimulation {
       this.landscapeBlend = Math.min(1, this.landscapeBlend + dt * 0.65);
     }
 
-    this.trauma = Math.max(0, this.trauma - dt * 1.9);
+    stepScreenShake(this.shakeState, dt);
     if (this.playerHitFlash > 0) this.playerHitFlash = Math.max(0, this.playerHitFlash - dt);
     this.playerScaleX += (1 - this.playerScaleX) * Math.min(1, dt * 14);
     this.playerScaleY += (1 - this.playerScaleY) * Math.min(1, dt * 14);
 
     if (this.defeatBeatTimer > 0) {
-      this.defeatBeatTimer -= dt;
-      this.updateParticles(dt);
-      if (this.defeatBeatTimer <= 0) {
-        this.finalizeRunRecord(false);
-        this.setStatus('gameover');
+      // If a final boss is already dying or portal transition is active, victory takes precedence over defeat
+      if ((this.boss.active && !this.boss.isMiniBoss && this.boss.dyingTimer > 0) || this.portal !== null) {
+        this.defeatBeatTimer = 0;
+        this.hp = Math.max(1, this.hp);
+      } else {
+        this.defeatBeatTimer -= dt;
+        this.updateParticles(dt);
+        if (this.defeatBeatTimer <= 0) {
+          this.finalizeRunRecord(false);
+          this.setStatus('gameover');
+        }
+        return;
       }
-      return;
     }
 
     if (this.hitstopTimer > 0) {
@@ -1115,16 +1227,17 @@ export class GameSimulation {
     }
 
     this.elapsedSec += dt;
+    this.escalation = computeDynamicEscalation(this.score, this.elapsedSec, this.difficulty);
 
-    // Advance level beat clock synced to live music playback (with smooth fallback clock)
+    // Advance level beat clock synced to live music playback (with smooth fallback & jump guard)
     this.prevBeatClockSec = this.levelBeatClockSec;
-    const liveAudioTime = soundEngine.getMusicTimeSec();
+    const liveAudioTime = soundEngine.getMusicTimeSec(this.levelIndex);
     if (liveAudioTime !== null && Number.isFinite(liveAudioTime)) {
       if (liveAudioTime + 0.4 < this.prevBeatClockSec) {
         // Track looped back to start
         this.prevBeatClockSec = Math.max(0, liveAudioTime - dt);
         this.levelBeatClockSec = liveAudioTime;
-      } else if (liveAudioTime >= this.prevBeatClockSec) {
+      } else if (liveAudioTime >= this.prevBeatClockSec && liveAudioTime - this.prevBeatClockSec <= 0.65) {
         this.levelBeatClockSec = liveAudioTime;
       } else {
         this.levelBeatClockSec += dt;
@@ -1142,6 +1255,7 @@ export class GameSimulation {
       if (Math.abs(this.windForceX) < 1) this.windForceX = 0;
     }
 
+    if (this.killHitstopCooldown > 0) this.killHitstopCooldown = Math.max(0, this.killHitstopCooldown - dt);
     if (this.playerInvulnTimer > 0) this.playerInvulnTimer = Math.max(0, this.playerInvulnTimer - dt);
     if (this.specialCooldown > 0) this.specialCooldown = Math.max(0, this.specialCooldown - dt);
     if (this.secondaryCooldown > 0) this.secondaryCooldown = Math.max(0, this.secondaryCooldown - dt);
@@ -1151,7 +1265,7 @@ export class GameSimulation {
 
     // Update dynamic approaching-invasion intensity & alert signals
     const curWave = this.config.waves[this.waveIndex];
-    const levelWaves = this.config.waves.filter((w) => w.level === this.levelIndex);
+    const levelWaves = this.getLevelWaves(this.levelIndex);
     const waveInLevel =
       curWave && curWave.level === this.levelIndex
         ? Math.max(1, levelWaves.indexOf(curWave) + 1)
@@ -1223,7 +1337,7 @@ export class GameSimulation {
       this.updateParticles(dt);
       this.updateCallouts(dt);
       this.hudAccumulator += dt;
-      if (this.hudAccumulator >= 0.08) {
+      if (this.hudAccumulator >= HUD_EMIT_INTERVAL_SEC) {
         this.hudAccumulator = 0;
         this.emitHud();
       }
@@ -1247,7 +1361,7 @@ export class GameSimulation {
     this.updateCallouts(dt);
 
     this.hudAccumulator += dt;
-    if (this.hudAccumulator >= 0.08) {
+    if (this.hudAccumulator >= HUD_EMIT_INTERVAL_SEC) {
       this.hudAccumulator = 0;
       this.emitHud();
     }
@@ -1263,7 +1377,7 @@ export class GameSimulation {
     if (p.phase === 'forming') {
       // Swirling boss-defeat particles condense inward into the swirling dimensional rift!
       p.radius = p.maxRadius * (0.18 + 0.82 * Math.sin(p.progress * Math.PI * 0.5));
-      for (const pt of this.particles) {
+      for (const pt of this.particlePool.items) {
         if (!pt.active) continue;
         const dx = p.x - pt.x;
         const dy = p.y - pt.y;
@@ -1803,8 +1917,15 @@ export class GameSimulation {
             this.boss.dyingTimer <= 0 &&
             checkCircleCollision(this.frog.x + 28, this.frog.y, CARPINCHO_FACON_RANGE, this.boss.x, this.boss.y, this.boss.radius)
           ) {
-            this.boss.hp -= this.config.player.frogAlly.bubbleDamage * 2.8;
+            const faconDmg = this.config.player.frogAlly.bubbleDamage * 2.8;
+            this.boss.hp -= faconDmg;
             this.boss.hitFlashTimer = 0.06;
+            triggerBossHitShake(this.shakeState, {
+              damage: faconDmg,
+              heavy: true,
+              impactDirX: this.boss.x - this.frog.x,
+              impactDirY: this.boss.y - this.frog.y,
+            });
             this.spawnBurst(this.boss.x - 24, this.boss.y, '#F8FAFC', 7, 160, true);
             slashed = true;
           }
@@ -1938,8 +2059,15 @@ export class GameSimulation {
 
       if (!hitTarget && this.boss.active && this.boss.dyingTimer <= 0) {
         if (checkCircleCollision(pf.x, pf.y, pf.radius + 8, this.boss.x, this.boss.y, this.boss.radius)) {
-          this.boss.hp -= Math.round(this.batricioRainDamage * 0.72);
+          const frogDmg = Math.round(this.batricioRainDamage * 0.72);
+          this.boss.hp -= frogDmg;
           this.boss.hitFlashTimer = 0.06;
+          triggerBossHitShake(this.shakeState, {
+            damage: frogDmg,
+            heavy: false,
+            impactDirX: pf.vx,
+            impactDirY: pf.vy,
+          });
           this.spawnBurst(pf.x, pf.y, '#A3E635', 9, 175, true);
           soundEngine.playHit(true);
           hitTarget = true;
@@ -1996,6 +2124,12 @@ export class GameSimulation {
           r.hitIds.push(-999);
           this.boss.hp -= 92;
           this.boss.hitFlashTimer = 0.09;
+          triggerBossHitShake(this.shakeState, {
+            damage: 92,
+            heavy: true,
+            impactDirX: r.vx,
+            impactDirY: r.vy,
+          });
           this.spawnBurst(this.boss.x - 24, this.boss.y, '#FACC15', 14, 210, true);
           soundEngine.playFaconSlash();
         }
@@ -2259,34 +2393,63 @@ export class GameSimulation {
       this.spawnMutagenPod(this.width + 26, this.height * (0.28 + Math.random() * 0.44));
     }
 
-    // Rhythm-synced enemy spawning aligned to each level's song BPM & first beat drop
+    // Rhythm-synced enemy spawning aligned to each level's song BPM & first beat drop,
+    // dynamically scaled by difficulty + player score and time survived
     const rhythm = getLevelRhythmProfile(this.levelIndex);
     const beatDur = 60 / rhythm.bpm;
-    const beatsPerSpawn = Math.max(1, Math.round(currentWave.spawnIntervalSec / beatDur));
+    const timing = computeDifficultySpawnTiming(
+      currentWave.spawnIntervalSec,
+      beatDur,
+      this.difficulty,
+      this.escalation
+    );
     const beatEvents = computeBeatSpawnEvents(
       this.prevBeatClockSec,
       this.levelBeatClockSec,
       rhythm.bpm,
       rhythm.firstDropSec,
-      beatsPerSpawn
+      timing.beatsPerSpawn
     );
 
     const archList = currentWave.archetypes;
-    if (beatEvents.count > 0 && this.enemies.length < 11) {
+    if (beatEvents.count > 0 && this.enemies.length < timing.maxActiveEnemies) {
       for (let s = 0; s < beatEvents.count; s++) {
+        if (this.enemies.length >= timing.maxActiveEnemies) break;
         const pickIdx = Math.floor(Math.random() * archList.length);
         const arch = archList[pickIdx] as EnemyArchetypeId;
         this.spawnEnemy(arch);
         // On strong musical downbeats (beat 1 of bar), drop a tight rhythmic wingman pair
-        if (beatEvents.hasDownbeat && s === 0 && this.waveTimer > 2.5 && this.enemies.length < 9) {
+        if (
+          beatEvents.hasDownbeat &&
+          s === 0 &&
+          this.waveTimer > 2.5 &&
+          this.enemies.length < timing.maxDownbeatPairCap
+        ) {
           const partnerArch = archList[(pickIdx + 1) % archList.length] as EnemyArchetypeId;
           this.spawnEnemy(partnerArch);
         }
+        // High difficulty or high dynamic escalation: extra swarm reinforcement on downbeats
+        if (
+          timing.extraDownbeatSpawn &&
+          beatEvents.hasDownbeat &&
+          s === 0 &&
+          this.waveTimer > 4.0 &&
+          this.enemies.length < timing.maxActiveEnemies
+        ) {
+          const extraArch = archList[(pickIdx + 2) % archList.length] as EnemyArchetypeId;
+          this.spawnEnemy(extraArch);
+        }
       }
-      this.spawnTimer = currentWave.spawnIntervalSec;
-    } else if (this.enemies.length === 0 && this.spawnTimer <= 0 && this.waveTimer > 1.2) {
-      // Safety net during quiet intro bars before firstDropSec so combat starts briskly
-      this.spawnTimer = currentWave.spawnIntervalSec;
+      this.spawnTimer = timing.spawnIntervalSec;
+    } else if (
+      this.spawnTimer <= 0 &&
+      this.waveTimer > 1.2 &&
+      this.enemies.length < timing.maxActiveEnemies &&
+      (this.enemies.length === 0 || this.escalation.spawnRateMult > 1.04)
+    ) {
+      // Continuous dynamic reinforcement timer (and intro safety net) so rising score/time
+      // smoothly accelerates enemy fly spawn frequency even between musical beat subdivisions
+      this.spawnTimer = timing.spawnIntervalSec;
       const arch = archList[Math.floor(Math.random() * archList.length)] as EnemyArchetypeId;
       this.spawnEnemy(arch);
     }
@@ -2319,7 +2482,14 @@ export class GameSimulation {
 
   private spawnEnemy(archetype: EnemyArchetypeId) {
     const cfg = this.config.enemies[archetype];
-    const scaled = computeLevelEnemyStats(cfg.hp, cfg.speed, cfg.fireInterval, this.levelIndex);
+    const scaled = computeLevelEnemyStats(
+      cfg.hp,
+      cfg.speed,
+      cfg.fireInterval,
+      this.levelIndex,
+      this.difficulty,
+      this.escalation.velocityMult
+    );
     const marginY = cfg.radius + 54;
     const y = marginY + Math.random() * Math.max(40, this.height - marginY * 2);
     this.enemies.push({
@@ -2414,7 +2584,7 @@ export class GameSimulation {
 
         const bigBurst = res.unlockedSecret || isFreshSuperSaiyan;
         this.hitstopTimer = bigBurst ? 0.095 : 0.055;
-        this.trauma = Math.min(1, this.trauma + (bigBurst ? 0.58 : 0.32));
+        addScreenShakeTrauma(this.shakeState, bigBurst ? 0.58 : 0.32);
         this.playerScaleX = bigBurst ? 1.35 : 1.24;
         this.playerScaleY = bigBurst ? 0.76 : 0.82;
         this.spawnBurst(
@@ -2595,7 +2765,7 @@ export class GameSimulation {
   }
 
   private spawnMegaAcidSplash(b: PlayerBullet) {
-    this.acidPools.push({
+    this.pushAcidPool({
       x: b.x,
       y: Math.min(this.height - 32, b.y),
       vx: -32,
@@ -2701,7 +2871,7 @@ export class GameSimulation {
           this.spawnMegaAcidSplash(b);
           this.spawnBurst(b.x, b.y, '#BEF264', 14, 170, true);
         } else {
-          this.acidPools.push({
+          this.pushAcidPool({
             x: b.x,
             y: this.height - 32,
             vx: -45,
@@ -2837,7 +3007,7 @@ export class GameSimulation {
             if (b.kind === 'mega_acid') {
               this.spawnMegaAcidSplash(b);
             } else {
-              this.acidPools.push({
+              this.pushAcidPool({
                 x: e.x,
                 y: e.y,
                 vx: -35,
@@ -2872,7 +3042,23 @@ export class GameSimulation {
             }
           }
 
-          this.spawnBurst(b.x, b.y, b.color, b.isSecondary ? 9 : 4, b.isSecondary ? 170 : 120, b.isSecondary);
+          emitBulletImpactParticles(this.particlePool, {
+            x: b.x,
+            y: b.y,
+            vx: b.vx,
+            vy: b.vy,
+            color: b.color,
+            secondaryColor: b.glowColor,
+            heavy:
+              b.isSecondary ||
+              b.kind === 'mega_acid' ||
+              b.kind === 'mortar' ||
+              b.kind === 'snap' ||
+              b.kind === 'cluster_bomb',
+            shielded: e.archetype === 'tank' && e.shieldActive && !b.armorPierce,
+            acid: b.acidDps > 0 || b.kind === 'acid' || b.kind === 'mega_acid',
+            reducedMotion: this.reducedMotion,
+          });
           soundEngine.playHit(b.isSecondary || b.kind === 'acid' || b.kind === 'snap' || b.kind === 'mortar');
 
           if (b.splitsOnHit > 0) {
@@ -2893,11 +3079,19 @@ export class GameSimulation {
           const bossDmg = shieldedBoss ? Math.max(1, Math.round(b.damage * 0.35)) : b.damage;
           this.boss.hp -= bossDmg;
           this.boss.hitFlashTimer = 0.048;
+          triggerBossHitShake(this.shakeState, {
+            damage: bossDmg,
+            isSecondary: b.isSecondary,
+            shielded: shieldedBoss,
+            heavy: b.isSecondary || b.damage >= 45 || b.kind === 'mega_acid' || b.kind === 'cluster_bomb',
+            impactDirX: b.vx,
+            impactDirY: b.vy,
+          });
           if (b.acidDps > 0) {
             if (b.kind === 'mega_acid') {
               this.spawnMegaAcidSplash(b);
             } else {
-              this.acidPools.push({
+              this.pushAcidPool({
                 x: b.x,
                 y: b.y,
                 vx: -25,
@@ -2909,11 +3103,21 @@ export class GameSimulation {
               });
             }
           }
+          emitBulletImpactParticles(this.particlePool, {
+            x: b.x,
+            y: b.y,
+            vx: b.vx,
+            vy: b.vy,
+            color: shieldedBoss ? '#38BDF8' : b.color,
+            secondaryColor: shieldedBoss ? '#FEF08A' : b.glowColor,
+            heavy: b.isSecondary || b.damage >= 45,
+            shielded: shieldedBoss,
+            acid: b.acidDps > 0 || b.kind === 'acid' || b.kind === 'mega_acid',
+            reducedMotion: this.reducedMotion,
+          });
           if (shieldedBoss) {
-            this.spawnBurst(b.x, b.y, '#38BDF8', 5, 165, false);
             soundEngine.playShieldClang();
           } else {
-            this.spawnBurst(b.x, b.y, b.color, b.isSecondary ? 9 : 4, 155, b.isSecondary);
             soundEngine.playHit(b.isSecondary);
           }
           if (b.splitsOnHit > 0) {
@@ -2948,13 +3152,27 @@ export class GameSimulation {
         this.registerComboKill(e.x, e.y);
         const pts = calculateKillScore(this.config.enemies[e.archetype].score, this.combo);
         this.score += pts;
-        this.hitstopTimer = Math.max(this.hitstopTimer, 0.028);
-        this.trauma = Math.min(1, this.trauma + 0.14);
-        this.spawnBurst(e.x, e.y, this.config.enemies[e.archetype].accentColor, 14, 210, true);
-        soundEngine.playExplosion();
+        // Reserve kill hitstop for heavy tank kills with cooldown so rapid swarm kills never stutter movement
+        if (e.archetype === 'tank' && this.killHitstopCooldown <= 0) {
+          this.hitstopTimer = Math.max(this.hitstopTimer, 0.02);
+          this.killHitstopCooldown = 0.45;
+        }
+        addScreenShakeTrauma(this.shakeState, e.archetype === 'tank' ? 0.16 : 0.09);
+        const expTier = getExplosionTierForArchetype(e.archetype);
+        emitEnemyExplosionParticles(this.particlePool, {
+          x: e.x,
+          y: e.y,
+          primaryColor: this.config.enemies[e.archetype].accentColor,
+          accentColor: '#FDE047',
+          tier: expTier,
+          reducedMotion: this.reducedMotion,
+        });
+        soundEngine.playExplosion(
+          expTier === 'heavy' ? 'heavy' : expTier === 'medium' ? 'medium' : 'small'
+        );
 
         if (loadout.acidChainExplosion && e.acidTimer > 0) {
-          this.acidPools.push({
+          this.pushAcidPool({
             x: e.x,
             y: e.y,
             vx: -30,
@@ -2997,7 +3215,9 @@ export class GameSimulation {
         this.height,
         this.config,
         tokensLeft,
-        this.levelIndex
+        this.levelIndex,
+        this.difficulty,
+        this.escalation.velocityMult
       );
       if (res.consumedToken) tokensLeft = Math.max(0, tokensLeft - 1);
 
@@ -3005,7 +3225,7 @@ export class GameSimulation {
         const dx = this.playerX - e.x;
         const dy = this.playerY - e.y;
         const dist = Math.max(1, Math.hypot(dx, dy));
-        const spdMult = computeEnemyBulletSpeedMult(this.levelIndex);
+        const spdMult = computeEnemyBulletSpeedMult(this.levelIndex, this.difficulty);
         if (res.fireKind === 'sniper') {
           const adx = e.aimX - e.x;
           const ady = e.aimY - e.y;
@@ -3076,7 +3296,7 @@ export class GameSimulation {
       }
 
       if (!e.dying && checkCircleCollision(this.playerX, this.playerY, 12, e.x, e.y, e.radius * 0.78)) {
-        this.damagePlayer();
+        this.damagePlayer(this.playerX - e.x, this.playerY - e.y);
         e.hp = 0;
       }
 
@@ -3097,14 +3317,14 @@ export class GameSimulation {
     if (b.dyingTimer > 0) {
       b.dyingTimer -= dt;
       if (Math.random() < 0.48) {
-        this.spawnBurst(
-          b.x + (Math.random() - 0.5) * 95,
-          b.y + (Math.random() - 0.5) * 70,
-          '#FDE047',
-          8,
-          260,
-          true
-        );
+        emitEnemyExplosionParticles(this.particlePool, {
+          x: b.x + (Math.random() - 0.5) * 95,
+          y: b.y + (Math.random() - 0.5) * 70,
+          primaryColor: b.isMiniBoss ? '#F59E0B' : '#F43F5E',
+          accentColor: '#FDE047',
+          tier: b.isMiniBoss ? 'medium' : 'heavy',
+          reducedMotion: this.reducedMotion,
+        });
       }
       if (b.dyingTimer <= 0) {
         b.active = false;
@@ -3236,14 +3456,28 @@ export class GameSimulation {
       b.hp = 0;
       b.dyingTimer = 0.65;
       this.hitstopTimer = 0.08;
-      this.trauma = 1;
-      soundEngine.playExplosion();
+      addScreenShakeTrauma(this.shakeState, 1, 1);
+      emitEnemyExplosionParticles(this.particlePool, {
+        x: b.x,
+        y: b.y,
+        primaryColor: b.isMiniBoss ? '#F59E0B' : '#F43F5E',
+        accentColor: '#FDE047',
+        tier: b.isMiniBoss ? 'miniboss' : 'boss',
+        reducedMotion: this.reducedMotion,
+      });
+      if (!b.isMiniBoss) {
+        this.defeatBeatTimer = 0;
+        this.hp = Math.max(1, this.hp);
+        for (const eb of this.enemyBullets) eb.active = false;
+        this.playerInvulnTimer = Math.max(this.playerInvulnTimer, 2.5);
+      }
+      soundEngine.playExplosion(b.isMiniBoss ? 'heavy' : 'boss');
       return;
     }
 
     if (b.hp <= b.maxHp * 0.5 && b.phase === 1) {
       b.phase = 2;
-      this.trauma = Math.min(1, this.trauma + 0.5);
+      addScreenShakeTrauma(this.shakeState, 0.5);
       this.spawnBurst(b.x, b.y, '#F43F5E', 24, 280, true);
       soundEngine.playBossWarning();
       this.callouts.push({
@@ -3525,7 +3759,7 @@ export class GameSimulation {
     }
 
     if (checkCircleCollision(this.playerX, this.playerY, 12, b.x, b.y, b.radius * 0.78)) {
-      this.damagePlayer();
+      this.damagePlayer(this.playerX - b.x, this.playerY - b.y);
     }
   }
 
@@ -3574,7 +3808,7 @@ export class GameSimulation {
 
       if (checkCircleCollision(this.playerX, this.playerY, 9.5, eb.x, eb.y, eb.radius)) {
         eb.active = false;
-        this.damagePlayer();
+        this.damagePlayer(eb.vx || -1, eb.vy);
       }
     }
   }
@@ -3589,7 +3823,7 @@ export class GameSimulation {
     if (crossed) {
       const milestoneBonus = crossed.threshold * 25;
       this.score += milestoneBonus;
-      this.trauma = Math.min(1, this.trauma + 0.24);
+      addScreenShakeTrauma(this.shakeState, 0.24);
       this.spawnBurst(this.playerX, this.playerY, crossed.accentColor, 18, 250, true);
       this.spawnBurst(killX, killY, crossed.accentColor, 14, 210, true);
       soundEngine.playComboMilestone(crossed.tierIndex);
@@ -3605,28 +3839,41 @@ export class GameSimulation {
         maxTtl: 2.4,
       };
       this.emitHud();
-    } else if (this.combo >= 2) {
-      this.emitHud();
     }
   }
 
-  private damagePlayer() {
-    if (this.playerInvulnTimer > 0 || this.defeatBeatTimer > 0) return;
+  private damagePlayer(impactDirX = -1, impactDirY = 0) {
+    if (
+      this.playerInvulnTimer > 0 ||
+      this.defeatBeatTimer > 0 ||
+      this.portal !== null ||
+      (this.boss.active && !this.boss.isMiniBoss && this.boss.dyingTimer > 0)
+    ) {
+      return;
+    }
     this.hp = Math.max(0, this.hp - 1);
+    const fatal = this.hp <= 0;
     this.damageTaken++;
     this.combo = 0;
     this.comboTimer = 0;
     this.comboMilestone = null;
     this.playerInvulnTimer = this.config.player.invulnerableDurationSec;
     this.playerHitFlash = 0.09;
-    this.hitstopTimer = 0.055;
-    this.trauma = Math.min(1, this.trauma + 0.65);
+    this.hitstopTimer = fatal ? 0.09 : 0.055;
+    triggerPlayerDamageShake(this.shakeState, impactDirX, impactDirY, fatal);
     this.playerScaleX = 0.75;
     this.playerScaleY = 1.28;
-    this.spawnBurst(this.playerX, this.playerY, '#FB7185', 18, 220, true);
+    emitPlayerHitParticles(this.particlePool, {
+      x: this.playerX,
+      y: this.playerY,
+      dirX: impactDirX,
+      dirY: impactDirY,
+      fatal,
+      reducedMotion: this.reducedMotion,
+    });
     soundEngine.playPlayerHurt();
 
-    if (this.hp <= 0) {
+    if (fatal) {
       this.defeatBeatTimer = 0.55;
     }
     this.emitHud();
@@ -3640,37 +3887,25 @@ export class GameSimulation {
     speed: number,
     outlined: boolean
   ) {
-    for (let i = 0; i < count; i++) {
-      const p = this.particles[this.particleCursor];
-      this.particleCursor = (this.particleCursor + 1) % PARTICLE_POOL_SIZE;
-      const ang = Math.random() * Math.PI * 2;
-      const spd = speed * (0.35 + Math.random() * 0.75);
-      p.active = true;
-      p.x = x;
-      p.y = y;
-      p.vx = Math.cos(ang) * spd;
-      p.vy = Math.sin(ang) * spd;
-      p.maxLife = 0.25 + Math.random() * 0.3;
-      p.life = p.maxLife;
-      p.size = 3.5 + Math.random() * 4.5;
-      p.color = color;
-      p.outlined = outlined;
-    }
+    emitGenericBurstParticles(this.particlePool, {
+      x,
+      y,
+      color,
+      count,
+      speed,
+      outlined,
+      reducedMotion: this.reducedMotion,
+    });
   }
 
   private updateParticles(dt: number) {
-    for (const p of this.particles) {
-      if (!p.active) continue;
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.vx *= 0.94;
-      p.vy *= 0.94;
-      p.life -= dt;
-      if (p.life <= 0) p.active = false;
-    }
+    stepParticlePool(this.particlePool, dt);
   }
 
   private updateCallouts(dt: number) {
+    if (this.callouts.length > MAX_CALLOUTS) {
+      this.callouts.splice(0, this.callouts.length - MAX_CALLOUTS);
+    }
     for (let i = this.callouts.length - 1; i >= 0; i--) {
       const c = this.callouts[i];
       c.y += c.vy * dt;
@@ -3681,7 +3916,7 @@ export class GameSimulation {
 
   public emitHud() {
     const wave = this.config.waves[this.waveIndex];
-    const levelWaves = this.config.waves.filter((w) => w.level === this.levelIndex);
+    const levelWaves = this.getLevelWaves(this.levelIndex);
     const waveInLevel = wave && wave.level === this.levelIndex
       ? Math.max(1, levelWaves.indexOf(wave) + 1)
       : levelWaves.length;
@@ -3796,11 +4031,15 @@ export class GameSimulation {
       enemiesDefeated: this.enemiesDefeated,
       damageTaken: this.damageTaken,
       elapsedSec: Math.round(this.elapsedSec),
+      difficulty: this.difficulty,
+      dynamicVelocityMult: this.escalation.velocityMult,
+      dynamicSpawnRateMult: this.escalation.spawnRateMult,
+      escalationTier: this.escalation.tier,
     });
   }
 
   public render(ctx: CanvasRenderingContext2D) {
-    const shakeMag = this.trauma * this.trauma * 12;
+    const shake = sampleScreenShake(this.shakeState, this.time, this.reducedMotion);
     const loadout = this.getLoadout();
     const secMeta = SECONDARY_ABILITY_META[this.secondarySpecies];
     const secCharge = Math.max(
@@ -3822,8 +4061,11 @@ export class GameSimulation {
       invasionAlertLabel: this.invasionAlertLabel,
       superSaiyanActive: loadout.isSuperSaiyanFusion,
       portal: this.portal,
-      shakeX: (Math.random() - 0.5) * 2 * shakeMag,
-      shakeY: (Math.random() - 0.5) * 2 * shakeMag,
+      shakeX: shake.offsetX,
+      shakeY: shake.offsetY,
+      shakeAngleRad: shake.angleRad,
+      shakeOverscanScale: shake.overscanScale,
+      damageFlashAlpha: shake.damageFlashAlpha,
       playerX: this.playerX,
       playerY: this.playerY,
       playerVy: this.playerVy,
@@ -3857,7 +4099,7 @@ export class GameSimulation {
       vortexes: this.vortexes,
       pickups: this.pickups,
       boss: this.boss,
-      particles: this.particles,
+      particles: this.particlePool.items,
       callouts: this.callouts,
       config: this.config,
     };

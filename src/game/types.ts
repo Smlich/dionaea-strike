@@ -17,6 +17,23 @@ export type SpeciesLevels = Record<SpeciesId, SpeciesLevel>;
 
 export type LevelNumber = 1 | 2 | 3 | 4 | 5;
 
+export type DifficultyId = 'easy' | 'normal' | 'hard';
+
+export interface DifficultyProfile {
+  id: DifficultyId;
+  label: string;
+  shortLabel: string;
+  englishLabel: string;
+  description: string;
+  enemySpeedMult: number;
+  spawnRateMult: number;
+  enemyBulletSpeedMult: number;
+  maxActiveEnemies: number;
+  maxDownbeatPairCap: number;
+  extraDownbeatSpawn: boolean;
+  accentColor: string;
+}
+
 export type EnemyArchetypeId =
   | 'drone'
   | 'mosquito'
@@ -310,6 +327,7 @@ export interface HudSnapshot {
   comboTimerRatio: number;
   comboMilestone: ComboMilestoneAnnouncement | null;
   levelIndex: LevelNumber;
+  difficulty: DifficultyId;
   waveInLevel: number;
   wavesInLevel: number;
   waveTitle: string;
@@ -354,4 +372,7 @@ export interface HudSnapshot {
   enemiesDefeated: number;
   damageTaken: number;
   elapsedSec: number;
+  dynamicVelocityMult: number;
+  dynamicSpawnRateMult: number;
+  escalationTier: number;
 }

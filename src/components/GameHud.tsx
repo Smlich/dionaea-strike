@@ -1,4 +1,4 @@
-import { useRef, type PointerEvent as ReactPointerEvent } from 'react';
+import { memo, useRef, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   AlertTriangle,
   ArrowLeftRight,
@@ -13,6 +13,7 @@ import {
   VolumeX,
   Zap,
 } from 'lucide-react';
+import { getDifficultyProfile } from '../game/difficulty';
 import { getComboRank, getControlPrompts } from '../game/fusionRules';
 import { ALL_SPECIES_IDS, PET_CATALOG } from '../game/gameConfig';
 import type { GameConfig, HudSnapshot, PetId } from '../game/types';
@@ -87,7 +88,7 @@ const PET_HUD_THEME: Record<
   },
 };
 
-export function GameHud({
+export const GameHud = memo(function GameHud({
   hud,
   config,
   muted,
@@ -115,6 +116,7 @@ export function GameHud({
   const isXbox = prompts.mode === 'xbox';
   const specialOngoing = Boolean(hud.activeSpecialLabel && hud.activeSpecialRemainingSec > 0.05);
   const showTouchThumbDock = isTouchDevice && !isXbox;
+  const diffProfile = getDifficultyProfile(hud.difficulty);
 
   const makeButtonHandlers = (action: () => void, disabled = false) => ({
     onPointerDown: (e: ReactPointerEvent<HTMLButtonElement>) => {
@@ -323,13 +325,35 @@ export function GameHud({
                   hud.isNewHighScore ? 'border-amber-400/80' : 'border-[#090D16]'
                 }`}
               >
-                <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-400 whitespace-nowrap leading-tight">
-                  {hud.bossActive
-                    ? hud.isMiniBoss
-                      ? `NV.${hud.levelIndex}/5 · MINI`
-                      : `NV.${hud.levelIndex}/5 · JEFE`
-                    : `NV.${hud.levelIndex}/5 · OL.${hud.waveInLevel}/${hud.wavesInLevel}`}
-                </span>
+                <div className="flex items-center gap-1.5 leading-tight">
+                  <span
+                    data-testid="hud-difficulty-badge"
+                    aria-label={`Dificultad ${diffProfile.label}`}
+                    className="text-[9px] font-mono font-extrabold uppercase tracking-wider whitespace-nowrap"
+                    style={{ color: diffProfile.accentColor }}
+                  >
+                    {diffProfile.shortLabel}
+                  </span>
+                  {hud.escalationTier >= 1 && (
+                    <span
+                      data-testid="hud-escalation-badge"
+                      title={`Enjambre acelerado: Vel. ${hud.dynamicVelocityMult.toFixed(2)}× · Oleadas ${hud.dynamicSpawnRateMult.toFixed(2)}×`}
+                      className="text-[9px] font-mono font-extrabold tabular-nums text-amber-300 whitespace-nowrap"
+                    >
+                      ⚡{hud.dynamicVelocityMult.toFixed(2)}×
+                    </span>
+                  )}
+                  <span aria-hidden="true" className="text-[9px] text-slate-600">
+                    ·
+                  </span>
+                  <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-400 whitespace-nowrap">
+                    {hud.bossActive
+                      ? hud.isMiniBoss
+                        ? `NV.${hud.levelIndex}/5 · MINI`
+                        : `NV.${hud.levelIndex}/5 · JEFE`
+                      : `NV.${hud.levelIndex}/5 · OL.${hud.waveInLevel}/${hud.wavesInLevel}`}
+                  </span>
+                </div>
                 <span
                   aria-label={`Puntuación ${hud.score}`}
                   className="text-sm sm:text-lg font-display font-black tabular-nums leading-none text-white"
@@ -726,5 +750,5 @@ export function GameHud({
       </div>
     </div>
   );
-}
+});
 

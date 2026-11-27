@@ -352,10 +352,10 @@ test('all menu and 5 level music tracks resolve appropriately', () => {
   assert.equal(getMusicTrackForState('playing', 1), LEVEL_1_MUSIC_SRC);
   assert.equal(getMusicTrackForState('paused', 1), LEVEL_1_MUSIC_SRC);
   assert.equal(getMusicTrackForState('playing', 2), LEVEL_2_MUSIC_SRC);
-  assert.equal(LEVEL_2_MUSIC_SRC, '/assets/aistudio/Dionaea_Strike_-_Nivel_2_Cumbia_Villera.m4a');
+  assert.equal(LEVEL_2_MUSIC_SRC, 'assets/audio/level-2-cumbia.m4a');
   assert.equal(getMusicTrackForState('playing', 3), LEVEL_3_MUSIC_SRC);
   assert.equal(getMusicTrackForState('playing', 4), LEVEL_4_MUSIC_SRC);
-  assert.equal(LEVEL_4_MUSIC_SRC, '/assets/aistudio/Dionaea_Strike_-_Nivel_4_Cuarteto.m4a');
+  assert.equal(LEVEL_4_MUSIC_SRC, 'assets/audio/level-4-cuarteto.m4a');
   assert.notEqual(LEVEL_4_MUSIC_SRC, LEVEL_1_MUSIC_SRC);
   assert.equal(getMusicTrackForState('playing', 5), LEVEL_5_MUSIC_SRC);
 

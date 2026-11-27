@@ -1,13 +1,20 @@
+import {
+  WebAudioSoundManager,
+  type ExplosionSfxTier,
+  type UiSfxKind,
+} from './soundManager';
 import type { GameStatus, LevelNumber, SpeciesId } from './types';
+
+export type { ExplosionSfxTier, UiSfxKind };
 
 export const AUDIO_PREFS_STORAGE_KEY = 'dionaea_strike_audio_v1';
 
-export const MENU_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Men___Voz_AR__87d64c21.m4a';
-export const LEVEL_1_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Rap_AR__Voz_Argentina__5bdef878.m4a';
-export const LEVEL_2_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Nivel_2_Cumbia_Villera.m4a';
-export const LEVEL_3_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Nivel_3_Boom_Bap__Voz_AR__7c61e348.m4a';
-export const LEVEL_4_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Nivel_4_Cuarteto.m4a';
-export const LEVEL_5_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Nivel_5_Boss__Voz_AR__2a892b6f.m4a';
+export const MENU_MUSIC_SRC = 'assets/audio/menu-theme.m4a';
+export const LEVEL_1_MUSIC_SRC = 'assets/audio/level-1-pampa.m4a';
+export const LEVEL_2_MUSIC_SRC = 'assets/audio/level-2-cumbia.m4a';
+export const LEVEL_3_MUSIC_SRC = 'assets/audio/level-3-boombap.m4a';
+export const LEVEL_4_MUSIC_SRC = 'assets/audio/level-4-cuarteto.m4a';
+export const LEVEL_5_MUSIC_SRC = 'assets/audio/level-5-boss.m4a';
 
 export const LEVEL_MUSIC_TRACKS: Record<LevelNumber, string> = {
   1: LEVEL_1_MUSIC_SRC,
@@ -70,7 +77,7 @@ const LEVEL_SFX_PROFILES: Record<LevelNumber, LevelSfxProfile> = {
     pitchMult: 0.96,
     scaleNotes: [440, 554.37, 659.25, 880],
   },
-  // Nivel 2 (Selva Misionera / Cumbia)
+  // Nivel 2 (Selva Misionera / Cumbia Villera)
   2: {
     shootWave: 'sine',
     hitWave: 'triangle',
@@ -88,7 +95,7 @@ const LEVEL_SFX_PROFILES: Record<LevelNumber, LevelSfxProfile> = {
     pitchMult: 0.86,
     scaleNotes: [329.63, 392, 493.88, 659.25],
   },
-  // Nivel 4 (Autopista y Puerto / Rap AR Callejero)
+  // Nivel 4 (Autopista y Puerto / Cuarteto)
   4: {
     shootWave: 'sawtooth',
     hitWave: 'square',
@@ -130,89 +137,54 @@ function loadSavedAudioPrefs(): { musicVolume: number; sfxVolume: number } {
   }
 }
 
+function trackIdForState(status: GameStatus, levelIndex: LevelNumber): string {
+  return status === 'title' ? 'menu' : `level-${levelIndex}`;
+}
+
 class AnimeSoundEngine {
-  private ctx: AudioContext | null = null;
-  private muted = false;
+  private readonly manager = new WebAudioSoundManager();
   private currentLevel: LevelNumber = 1;
   private currentStatus: GameStatus = 'title';
-  private musicAudio: HTMLAudioElement | null = null;
-  private trackCache = new Map<string, HTMLAudioElement>();
-  private currentTrackSrc: string | null = null;
-  private desiredTrackSrc: string | null = null;
-  private musicShouldPlay = false;
-  private musicVolume = 0.65;
-  private sfxVolume = 0.75;
-  private musicPlaybackRate = 1.0;
   private assetBasePath = '';
 
   constructor() {
     const prefs = loadSavedAudioPrefs();
-    this.musicVolume = prefs.musicVolume;
-    this.sfxVolume = prefs.sfxVolume;
+    this.manager.setMusicVolume(prefs.musicVolume);
+    this.manager.setSfxVolume(prefs.sfxVolume);
+  }
+
+  public getManager(): WebAudioSoundManager {
+    return this.manager;
   }
 
   public setAssetBasePath(basePath?: string) {
-    const nextBase = !basePath || basePath === '/' ? '' : basePath.replace(/\/+$/, '');
+    const trimmed = basePath ? basePath.replace(/\/+$/, '') : '';
+    const nextBase = !trimmed || trimmed === '/' || trimmed === '.' ? '' : trimmed;
     if (nextBase !== this.assetBasePath) {
       this.assetBasePath = nextBase;
-      this.trackCache.clear();
     }
   }
 
   private resolveTrackUrl(trackPath: string): string {
     if (/^https?:\/\//i.test(trackPath)) return trackPath;
-    if (!this.assetBasePath) return trackPath;
-    const normalized = trackPath.startsWith('/') ? trackPath : `/${trackPath}`;
-    return `${this.assetBasePath}${normalized}`;
-  }
-
-  private getOrCreateAudio(trackPath: string): HTMLAudioElement {
-    const cached = this.trackCache.get(trackPath);
-    if (cached) return cached;
-    const audio = new Audio(this.resolveTrackUrl(trackPath));
-    audio.loop = true;
-    audio.preload = 'auto';
-    this.trackCache.set(trackPath, audio);
-    return audio;
+    const relative = trackPath.replace(/^\/+/, '');
+    if (!this.assetBasePath) return `./${relative}`;
+    return `${this.assetBasePath}/${relative}`;
   }
 
   public preloadTrack(trackPath: string) {
-    if (typeof window === 'undefined' || typeof Audio === 'undefined') return;
-    const audio = this.getOrCreateAudio(trackPath);
-    if (audio.readyState === 0) {
-      audio.load();
-    }
+    if (typeof window === 'undefined') return;
+    this.manager.preloadBuffer(this.resolveTrackUrl(trackPath));
   }
 
-  public preloadGameAudio(levelIndex: LevelNumber = 1) {
-    if (typeof window === 'undefined' || typeof Audio === 'undefined') return;
-    this.preloadTrack(MENU_MUSIC_SRC);
+  public preloadGameAudio(levelIndex?: LevelNumber) {
+    if (typeof window === 'undefined') return;
+    if (levelIndex === undefined) {
+      this.preloadTrack(MENU_MUSIC_SRC);
+      return;
+    }
     const curTrack = LEVEL_MUSIC_TRACKS[levelIndex];
     if (curTrack) this.preloadTrack(curTrack);
-    if (levelIndex < 5) {
-      const nextTrack = LEVEL_MUSIC_TRACKS[(levelIndex + 1) as LevelNumber];
-      if (nextTrack) this.preloadTrack(nextTrack);
-    }
-  }
-
-  private seekToStartOffset(audio: HTMLAudioElement, offsetSec: number) {
-    const target = Math.max(0, offsetSec);
-    const applySeek = () => {
-      try {
-        if (Number.isFinite(audio.duration) && audio.duration > target + 0.5) {
-          audio.currentTime = target;
-        } else if (!Number.isFinite(audio.duration) || audio.readyState >= 1) {
-          audio.currentTime = target;
-        }
-      } catch {
-        // Ignore seek error before metadata loads
-      }
-    };
-    if (audio.readyState >= 1) {
-      applySeek();
-    } else {
-      audio.addEventListener('loadedmetadata', applySeek, { once: true });
-    }
   }
 
   private persistAudioPrefs() {
@@ -221,8 +193,8 @@ class AnimeSoundEngine {
       window.localStorage.setItem(
         AUDIO_PREFS_STORAGE_KEY,
         JSON.stringify({
-          musicVolume: Number(this.musicVolume.toFixed(2)),
-          sfxVolume: Number(this.sfxVolume.toFixed(2)),
+          musicVolume: Number(this.manager.getMusicVolume().toFixed(2)),
+          sfxVolume: Number(this.manager.getSfxVolume().toFixed(2)),
         })
       );
     } catch {
@@ -230,197 +202,109 @@ class AnimeSoundEngine {
     }
   }
 
-  private getEffectiveMusicGain(status: GameStatus): number {
-    const scale = status === 'title' ? 0.54 : 0.68;
-    return clampUnit(this.musicVolume * scale);
+  private getMusicGainScale(status: GameStatus): number {
+    return status === 'title' ? 0.54 : 0.68;
   }
 
   public getMusicVolume(): number {
-    return this.musicVolume;
+    return this.manager.getMusicVolume();
   }
 
   public getSfxVolume(): number {
-    return this.sfxVolume;
+    return this.manager.getSfxVolume();
   }
 
   public setMusicVolume(volume: number) {
-    this.musicVolume = clampUnit(volume);
+    this.manager.setMusicVolume(clampUnit(volume));
     this.persistAudioPrefs();
-    if (this.musicAudio) {
-      this.musicAudio.volume = this.getEffectiveMusicGain(this.currentStatus);
-      // Never pause playback when volume reaches 0; keep track advancing silently
-      if (this.musicShouldPlay && this.musicAudio.paused) {
-        this.musicAudio.play().catch(() => {});
-      }
-    }
   }
 
   public setSfxVolume(volume: number) {
-    this.sfxVolume = clampUnit(volume);
+    this.manager.setSfxVolume(clampUnit(volume));
     this.persistAudioPrefs();
   }
 
   public setMuted(muted: boolean) {
-    this.muted = muted;
-    if (this.musicAudio) {
-      this.musicAudio.muted = muted;
-      // Keep track advancing silently even when muted
-      if (this.musicShouldPlay && this.desiredTrackSrc && this.musicAudio.paused) {
-        this.musicAudio.play().catch(() => {});
-      }
-    }
+    this.manager.setMuted(muted);
   }
 
   public isMuted(): boolean {
-    return this.muted;
+    return this.manager.isMuted();
+  }
+
+  public setSystemMuted(muted: boolean) {
+    this.manager.setSystemMuted(muted);
+  }
+
+  public isSystemMuted(): boolean {
+    return this.manager.isSystemMuted();
   }
 
   public isMusicPlayingDesired(): boolean {
-    return this.musicShouldPlay;
+    return this.manager.isMusicDesired();
   }
 
   public setLevel(levelIndex: LevelNumber) {
     this.currentLevel = levelIndex;
   }
 
-  public getMusicTimeSec(): number | null {
-    if (!this.musicAudio || this.musicAudio.paused) {
-      return null;
-    }
-    if (this.musicAudio.readyState >= 2 && Number.isFinite(this.musicAudio.currentTime)) {
-      return this.musicAudio.currentTime;
-    }
-    return null;
+  public getMusicTimeSec(expectedLevel?: LevelNumber): number | null {
+    const expectedTrackId = expectedLevel !== undefined ? `level-${expectedLevel}` : undefined;
+    return this.manager.getMusicPlaybackTime(expectedTrackId);
   }
 
   public syncMusicTempo(bossActive: boolean, bossPhase: 1 | 2) {
     const targetRate = bossActive && bossPhase === 2 ? 1.06 : 1.0;
-    if (Math.abs(this.musicPlaybackRate - targetRate) < 0.005) return;
-    this.musicPlaybackRate = targetRate;
-    if (this.musicAudio) {
-      try {
-        this.musicAudio.playbackRate = targetRate;
-      } catch {
-        // Ignore playbackRate errors in restricted environments
-      }
-    }
+    this.manager.setMusicPlaybackRate(targetRate);
   }
 
   public syncMusic(status: GameStatus, levelIndex: LevelNumber) {
     this.currentLevel = levelIndex;
     this.currentStatus = status;
-    if (typeof window === 'undefined' || typeof Audio === 'undefined') return;
 
     const nextSrc = getMusicTrackForState(status, levelIndex);
-    this.desiredTrackSrc = nextSrc;
-
     if (!nextSrc) {
-      this.musicShouldPlay = false;
-      this.stopMusic();
+      this.manager.stopMusic();
       return;
     }
 
-    const startOffset = status === 'title' ? 0 : getLevelRhythmProfile(levelIndex).startOffsetSec;
-
-    if (!this.musicAudio || this.currentTrackSrc !== nextSrc) {
-      this.stopMusic();
-      const audio = this.getOrCreateAudio(nextSrc);
-      audio.volume = this.getEffectiveMusicGain(status);
-      audio.muted = this.muted;
-      this.seekToStartOffset(audio, startOffset);
-      try {
-        audio.playbackRate = status === 'title' ? 1.0 : this.musicPlaybackRate;
-      } catch {
-        // Ignore
-      }
-      this.musicAudio = audio;
-      this.currentTrackSrc = nextSrc;
-    } else {
-      this.musicAudio.volume = this.getEffectiveMusicGain(status);
+    if (status === 'paused') {
+      this.manager.pauseMusic();
+      return;
     }
 
-    this.musicShouldPlay = status === 'playing' || status === 'title';
-    this.musicAudio.muted = this.muted;
-
-    if (this.musicShouldPlay) {
-      if (this.musicAudio.paused) {
-        this.musicAudio.play().catch(() => {});
-      }
-    } else {
-      // On explicit game pause, keep currentTime intact so music resumes right on beat
-      this.musicAudio.pause();
-    }
+    const startOffsetSec = status === 'title' ? 0 : getLevelRhythmProfile(levelIndex).startOffsetSec;
+    this.manager.playMusicLoop(trackIdForState(status, levelIndex), this.resolveTrackUrl(nextSrc), {
+      gainScale: this.getMusicGainScale(status),
+      playbackRate: status === 'title' ? 1.0 : undefined,
+      restart: false,
+      startOffsetSec,
+    });
   }
 
   public restartLevelMusic(levelIndex: LevelNumber = 1) {
     this.currentLevel = levelIndex;
     this.currentStatus = 'playing';
-    this.musicPlaybackRate = 1.0;
-    if (typeof window === 'undefined' || typeof Audio === 'undefined') return;
     const src = LEVEL_MUSIC_TRACKS[levelIndex] ?? null;
     if (!src) {
-      this.stopMusic();
+      this.manager.stopMusic();
       return;
     }
-    this.desiredTrackSrc = src;
-    this.musicShouldPlay = true;
-    const startOffset = getLevelRhythmProfile(levelIndex).startOffsetSec;
-
-    if (!this.musicAudio || this.currentTrackSrc !== src) {
-      this.stopMusic();
-      const audio = this.getOrCreateAudio(src);
-      audio.volume = this.getEffectiveMusicGain('playing');
-      this.seekToStartOffset(audio, startOffset);
-      this.musicAudio = audio;
-      this.currentTrackSrc = src;
-    } else {
-      this.musicAudio.volume = this.getEffectiveMusicGain('playing');
-      try {
-        audioPlaybackReset: {
-          this.musicAudio.playbackRate = 1.0;
-          break audioPlaybackReset;
-        }
-      } catch {
-        // Ignore playbackRate error
-      }
-      this.seekToStartOffset(this.musicAudio, startOffset);
-    }
-
-    this.musicAudio.muted = this.muted;
-    this.musicAudio.play().catch(() => {});
+    const startOffsetSec = getLevelRhythmProfile(levelIndex).startOffsetSec;
+    this.manager.playMusicLoop(`level-${levelIndex}`, this.resolveTrackUrl(src), {
+      gainScale: this.getMusicGainScale('playing'),
+      playbackRate: 1.0,
+      restart: true,
+      startOffsetSec,
+    });
   }
 
   public unlockMusicOnGesture() {
-    if (this.musicShouldPlay && this.musicAudio && this.musicAudio.paused) {
-      this.musicAudio.play().catch(() => {});
-    }
+    this.manager.unlock();
   }
 
   public stopMusic() {
-    if (this.musicAudio) {
-      this.musicAudio.pause();
-      try {
-        this.musicAudio.currentTime = 0;
-      } catch {
-        // Ignore seek error
-      }
-    }
-    this.musicAudio = null;
-    this.currentTrackSrc = null;
-  }
-
-  private ensureContext(): AudioContext | null {
-    if (this.muted || this.sfxVolume <= 0.001 || typeof window === 'undefined') return null;
-    if (!this.ctx) {
-      const AudioCtx =
-        window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!AudioCtx) return null;
-      this.ctx = new AudioCtx();
-    }
-    if (this.ctx.state === 'suspended') {
-      this.ctx.resume().catch(() => {});
-    }
-    return this.ctx;
+    this.manager.stopMusic();
   }
 
   private playTone(
@@ -431,43 +315,63 @@ class AnimeSoundEngine {
     gainPeak: number,
     delaySec = 0
   ) {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
-    const scaledPeak = gainPeak * this.sfxVolume;
-    if (scaledPeak <= 0.0005) return;
+    this.manager.playTone({
+      freqStart,
+      freqEnd,
+      duration,
+      type,
+      gainPeak,
+      delaySec,
+    });
+  }
 
-    const now = ctx.currentTime + delaySec;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = type;
-    const jitter = 1 + (Math.random() - 0.5) * 0.1;
-    osc.frequency.setValueAtTime(Math.max(36, freqStart * jitter), now);
-    osc.frequency.exponentialRampToValueAtTime(Math.max(36, freqEnd * jitter), now + duration);
+  // ---- UI Interaction SFX ----
 
-    gain.gain.setValueAtTime(0.001, now);
-    gain.gain.linearRampToValueAtTime(scaledPeak, now + Math.min(0.014, duration * 0.28));
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+  public playUiInteraction(kind: UiSfxKind) {
+    this.manager.playUiSfx(kind);
+  }
 
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + duration + 0.01);
+  public playUiClick() {
+    this.manager.playUiSfx('click');
+  }
+
+  public playUiConfirm() {
+    this.manager.playUiSfx('confirm');
+  }
+
+  public playUiCancel() {
+    this.manager.playUiSfx('cancel');
+  }
+
+  public playUiToggle(enabled: boolean) {
+    this.manager.playUiSfx(enabled ? 'toggle_on' : 'toggle_off');
+  }
+
+  public playUiHover() {
+    this.manager.playUiSfx('hover');
   }
 
   public playUiSfxPreview() {
-    this.playTone(520, 780, 0.09, 'triangle', 0.085);
-    this.playTone(780, 1040, 0.08, 'sine', 0.06, 0.055);
+    this.manager.playUiSfx('confirm');
   }
+
+  // ---- Combat & Weapon SFX ----
 
   public playShoot(fusionLevel: number, combo = 0) {
     const prof = LEVEL_SFX_PROFILES[this.currentLevel];
     const speedBonus = 1 + Math.min(0.28, combo * 0.015);
     const dur = Math.max(0.042, 0.072 / (prof.tempoMult * speedBonus));
     const base = (540 + fusionLevel * 68) * prof.pitchMult * (1 + Math.min(0.16, combo * 0.01));
-    this.playTone(base, base * (this.currentLevel === 2 ? 1.24 : 0.55), dur, prof.shootWave, 0.045);
-    if (this.currentLevel === 5) {
-      this.playTone(base * 1.498, base * 1.12, dur * 0.85, 'sine', 0.025, dur * 0.45);
-    }
+    this.manager.playFireSfx({
+      baseFreq: base,
+      endFreq: base * (this.currentLevel === 2 ? 1.24 : 0.55),
+      duration: dur,
+      wave: prof.shootWave,
+      gain: 0.052,
+      addHarmonic: this.currentLevel === 5,
+      harmonicStart: base * 1.498,
+      harmonicEnd: base * 1.12,
+    });
   }
 
   public playSnapBite() {
@@ -477,10 +381,18 @@ class AnimeSoundEngine {
   }
 
   public playHit(heavy = false) {
+    if (!this.manager.allowSfxKey(heavy ? 'hit_heavy' : 'hit', heavy ? 46 : 42)) return;
     const prof = LEVEL_SFX_PROFILES[this.currentLevel];
     const dur = (heavy ? 0.11 : 0.055) / prof.tempoMult;
     if (heavy) {
       this.playTone(230 * prof.pitchMult, 72, dur, prof.hitWave, 0.08);
+      this.manager.playNoiseBurst({
+        duration: 0.045,
+        gainPeak: 0.048,
+        filterType: 'bandpass',
+        filterFreqStart: 1200,
+        filterFreqEnd: 380,
+      });
     } else {
       const endFreq = this.currentLevel === 2 ? 620 : 210;
       this.playTone(460 * prof.pitchMult, endFreq, dur, prof.hitWave, 0.042);
@@ -488,31 +400,49 @@ class AnimeSoundEngine {
   }
 
   public playShieldClang() {
+    if (!this.manager.allowSfxKey('shield_clang', 55)) return;
     this.playTone(980, 420, 0.08, 'square', 0.055);
+    this.manager.playNoiseBurst({
+      duration: 0.035,
+      gainPeak: 0.04,
+      filterType: 'highpass',
+      filterFreqStart: 2800,
+      filterFreqEnd: 1600,
+    });
   }
 
   public playWindGust() {
     this.playTone(210, 460, 0.35, 'sine', 0.075);
     this.playTone(320, 180, 0.35, 'triangle', 0.05, 0.12);
+    this.manager.playNoiseBurst({
+      duration: 0.42,
+      gainPeak: 0.055,
+      filterType: 'bandpass',
+      filterFreqStart: 500,
+      filterFreqEnd: 1250,
+      filterQ: 1.5,
+    });
   }
 
-  public playExplosion() {
+  public playExplosion(tier: ExplosionSfxTier = 'medium') {
     const prof = LEVEL_SFX_PROFILES[this.currentLevel];
-    const dur = 0.24 / prof.tempoMult;
-    if (this.currentLevel === 3 || this.currentLevel === 4) {
-      this.playTone(135, 36, dur * 1.15, 'sine', 0.13);
-      this.playTone(420, 140, dur * 0.35, 'square', 0.06);
-    } else if (this.currentLevel === 5) {
-      this.playTone(155, 44, dur * 1.1, 'triangle', 0.13);
-      this.playTone(660, 440, dur * 0.4, 'sine', 0.05);
-    } else {
-      this.playTone(175 * prof.pitchMult, 42, dur, prof.bassWave, 0.115);
-    }
+    this.manager.playExplosionSfx(tier, {
+      pitchMult: prof.pitchMult,
+      tempoMult: prof.tempoMult,
+      bassWave: prof.bassWave,
+    });
   }
 
   public playPlayerHurt() {
     const prof = LEVEL_SFX_PROFILES[this.currentLevel];
     this.playTone(280 * prof.pitchMult, 62, 0.26 / prof.tempoMult, 'sawtooth', 0.15);
+    this.manager.playNoiseBurst({
+      duration: 0.16,
+      gainPeak: 0.11,
+      filterType: 'lowpass',
+      filterFreqStart: 1400,
+      filterFreqEnd: 220,
+    });
   }
 
   public playPodShift(cycleIndex: number) {
@@ -549,12 +479,13 @@ class AnimeSoundEngine {
   }
 
   public playRoyHorridScream() {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    if (this.manager.isMuted() || this.manager.isSystemMuted() || this.manager.getSfxVolume() <= 0.001) return;
+    const ctx = this.manager.ensureContext(false);
+    const sfxBus = this.manager.getBusNodes().sfxGain;
+    if (!ctx || !sfxBus) return;
 
     const now = ctx.currentTime;
-    const peak = 0.12 * this.sfxVolume;
-    if (peak <= 0.0005) return;
+    const peak = 0.12;
 
     const main = ctx.createOscillator();
     const clash = ctx.createOscillator();
@@ -598,7 +529,7 @@ class AnimeSoundEngine {
     main.connect(gain);
     clash.connect(gain);
     sub.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(sfxBus);
 
     main.start(now);
     clash.start(now);
@@ -636,43 +567,35 @@ class AnimeSoundEngine {
     const prof = LEVEL_SFX_PROFILES[this.currentLevel];
     switch (speciesId) {
       case 'dionaea':
-        // Heavy double-jaw metallic chomp + forward slash
         this.playTone(460, 120, 0.14, 'sawtooth', 0.12);
         this.playTone(280, 88, 0.16, 'triangle', 0.1, 0.045);
         break;
       case 'drosera':
-        // Elastic mucilage bola fling
         this.playTone(320, 680, 0.12, 'sine', 0.09);
         this.playTone(620, 290, 0.14, 'triangle', 0.08, 0.06);
         break;
       case 'nepenthes':
-        // Deep pressurized pitcher mortar launch
         this.playTone(190, 74, 0.22, 'sawtooth', 0.12);
         this.playTone(340, 150, 0.14, 'triangle', 0.08, 0.04);
         break;
       case 'utricularia':
-        // Singularity gravity swell
         this.playTone(140, 640, 0.26, 'sine', 0.11);
         this.playTone(480, 180, 0.24, 'triangle', 0.075, 0.06);
         break;
       case 'sarracenia':
-        // Supersonic staggered rocket salvo ignition
         for (let i = 0; i < 4; i++) {
           this.playTone(380 + i * 75, 920 + i * 80, 0.11, 'sawtooth', 0.065, i * 0.038);
         }
         break;
       case 'pinguicula':
-        // Crystalline prism fan chime
         this.playTone(740, 1180, 0.12, 'triangle', 0.085);
         this.playTone(980, 1480, 0.14, 'sine', 0.07, 0.035);
         break;
       case 'heliamphora':
-        // Twin solar helix laser arc
         this.playTone(540 * prof.pitchMult, 1080 * prof.pitchMult, 0.18, 'triangle', 0.1);
         this.playTone(810 * prof.pitchMult, 440 * prof.pitchMult, 0.18, 'sine', 0.08, 0.04);
         break;
       case 'cephalotus':
-        // Heavy cluster warhead thump
         this.playTone(170, 58, 0.24, 'square', 0.1);
         this.playTone(420, 210, 0.12, 'sawtooth', 0.08, 0.05);
         break;
@@ -687,13 +610,11 @@ class AnimeSoundEngine {
   }
 
   public playInvasionHorn() {
-    // Low distant atmospheric air-raid brass swell signaling approaching swarm/dreadnought
     this.playTone(124, 116, 0.62, 'sawtooth', 0.085);
     this.playTone(186, 174, 0.58, 'triangle', 0.065, 0.06);
   }
 
   public playBatricioMatingCall() {
-    // Rhythmic resonant toad mating croaks ("CROAC-CROAC-CROOOAC!") calling poisonous female frogs
     const croaks = [
       { delay: 0.0, f1: 145, f2: 260, dur: 0.18 },
       { delay: 0.24, f1: 158, f2: 285, dur: 0.2 },
@@ -707,27 +628,30 @@ class AnimeSoundEngine {
   }
 
   public playRoyAnnoyingMeow() {
-    // Sharp, whiny close-range nasal cat meow ("¡ÑAAAU!")
     this.playTone(540, 960, 0.085, 'sawtooth', 0.075, 0);
     this.playTone(960, 480, 0.14, 'sawtooth', 0.07, 0.08);
     this.playTone(1040, 620, 0.12, 'triangle', 0.045, 0.04);
   }
 
   public playSicarioGunshot() {
-    // Punchy noir pistol crack + metallic slide click
     this.playTone(620, 74, 0.075, 'sawtooth', 0.115, 0);
     this.playTone(1240, 190, 0.045, 'square', 0.075, 0);
     this.playTone(185, 52, 0.09, 'triangle', 0.095, 0.01);
+    this.manager.playNoiseBurst({
+      duration: 0.04,
+      gainPeak: 0.07,
+      filterType: 'highpass',
+      filterFreqStart: 1800,
+      filterFreqEnd: 700,
+    });
   }
 
   public playPalitoShieldBlock() {
-    // Warm crystalline protective chime deflecting enemy attacks
     this.playTone(587.33, 880, 0.1, 'triangle', 0.085, 0);
     this.playTone(1174.66, 1318.5, 0.12, 'sine', 0.065, 0.03);
   }
 
   public playPalitoCharmWave() {
-    // Dreamy romantic harp/glockenspiel arpeggio enamoring all enemies on screen
     const chord = [523.25, 659.25, 783.99, 987.77, 1046.5, 1318.5];
     chord.forEach((freq, idx) => {
       this.playTone(freq, freq * 1.03, 0.28, 'sine', 0.085, idx * 0.055);
@@ -736,24 +660,23 @@ class AnimeSoundEngine {
   }
 
   public playFaconSlash() {
-    // Crisp gaucho silver facón blade slash
     this.playTone(1480, 380, 0.095, 'sawtooth', 0.085, 0);
     this.playTone(980, 260, 0.11, 'triangle', 0.075, 0.02);
   }
 
   public playPonchoParry() {
-    // Heavy woven wool poncho whip + deflection thud
     this.playTone(340, 140, 0.11, 'triangle', 0.105, 0);
     this.playTone(520, 760, 0.08, 'sine', 0.06, 0.03);
   }
 
   public playSapucaiCry() {
-    // Iconic long Argentine "¡SAPUCAAAAAAIIII!!" gaucho cry (~2.35s) + galloping hoofbeats!
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    if (this.manager.isMuted() || this.manager.isSystemMuted() || this.manager.getSfxVolume() <= 0.001) return;
+    const ctx = this.manager.ensureContext(false);
+    const sfxBus = this.manager.getBusNodes().sfxGain;
+    if (!ctx || !sfxBus) return;
+
     const now = ctx.currentTime;
-    const peak = 0.125 * this.sfxVolume;
-    if (peak <= 0.0005) return;
+    const peak = 0.125;
 
     const voice = ctx.createOscillator();
     const harm = ctx.createOscillator();
@@ -764,7 +687,6 @@ class AnimeSoundEngine {
     voice.type = 'sawtooth';
     harm.type = 'triangle';
 
-    // Rising joyful trill -> long soaring high note -> triumphant cadence!
     voice.frequency.setValueAtTime(390, now);
     voice.frequency.exponentialRampToValueAtTime(660, now + 0.18);
     voice.frequency.exponentialRampToValueAtTime(920, now + 0.42);
@@ -797,7 +719,7 @@ class AnimeSoundEngine {
     voice.connect(filter);
     harm.connect(filter);
     filter.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(sfxBus);
 
     voice.start(now);
     harm.start(now);
@@ -806,7 +728,6 @@ class AnimeSoundEngine {
     harm.stop(now + 2.4);
     vibrato.stop(now + 2.4);
 
-    // Galloping hoofbeats underneath the Sapucai!
     for (let step = 0; step < 9; step++) {
       const t = step * 0.24;
       this.playTone(135, 62, 0.055, 'triangle', 0.08, t);
@@ -826,7 +747,6 @@ class AnimeSoundEngine {
    * mientras se abre el portal dimensional.
    */
   public playBossClearAnimeTheme() {
-    // 1. Bright anime synth lead melody (B major / F# resolution triumph!)
     const melody: Array<{ freq: number; dur: number; delay: number; next?: number }> = [
       { freq: 587.33, dur: 0.14, delay: 0.0 },
       { freq: 659.25, dur: 0.14, delay: 0.12 },
@@ -845,7 +765,6 @@ class AnimeSoundEngine {
       this.playTone(note.freq * 0.5, note.freq * 0.5, note.dur * 0.9, 'sawtooth', 0.042, note.delay);
     }
 
-    // 2. Modern anime chord pad + energetic octave bass stabs
     const chords: Array<{ delay: number; root: number; triad: [number, number, number] }> = [
       { delay: 0.0, root: 196.0, triad: [392.0, 493.88, 587.33] },
       { delay: 0.7, root: 220.0, triad: [440.0, 554.37, 659.25] },
@@ -860,7 +779,6 @@ class AnimeSoundEngine {
       }
     }
 
-    // 3. Sparkling final anime chime arpeggio
     const sparkles = [1046.5, 1318.51, 1567.98, 2093.0];
     sparkles.forEach((freq, idx) => {
       this.playTone(freq, freq * 1.02, 0.42, 'sine', 0.06, 2.24 + idx * 0.075);
@@ -874,7 +792,6 @@ class AnimeSoundEngine {
   }
 
   public playSuperSaiyanTransform() {
-    // Explosive golden ki ignition + soaring harmonic power chord!
     this.playTone(140, 620, 0.28, 'sawtooth', 0.11, 0);
     this.playTone(210, 930, 0.32, 'triangle', 0.095, 0.04);
     const burst = [523.25, 659.25, 783.99, 1046.5, 1318.51];

@@ -778,7 +778,7 @@ export function sanitizeGameConfig(raw: unknown): GameConfig {
   }
 
   if (Array.isArray(input.waves) && input.waves.length > 0) {
-    base.waves = input.waves.slice(0, 15).map((w, idx) => {
+    const sanitized = input.waves.slice(0, 15).map((w, idx) => {
       const def = DEFAULT_GAME_CONFIG.waves[idx] ?? DEFAULT_GAME_CONFIG.waves[0];
       const archetypes = Array.isArray(w.archetypes)
         ? w.archetypes
@@ -796,6 +796,23 @@ export function sanitizeGameConfig(raw: unknown): GameConfig {
         dropsMutagen: typeof w.dropsMutagen === 'boolean' ? w.dropsMutagen : def.dropsMutagen,
       };
     });
+
+    // Guarantee every campaign level (1..5) always has valid contiguous waves even when loading
+    // a legacy saved config with fewer than 15 waves.
+    const mergedWaves: GameConfig['waves'] = [];
+    for (const lvl of [1, 2, 3, 4, 5] as const) {
+      const customForLevel = sanitized.filter((w) => w.level === lvl);
+      if (customForLevel.length > 0) {
+        mergedWaves.push(...customForLevel);
+      } else {
+        mergedWaves.push(
+          ...DEFAULT_GAME_CONFIG.waves
+            .filter((w) => w.level === lvl)
+            .map((w) => ({ ...w, archetypes: [...w.archetypes] }))
+        );
+      }
+    }
+    base.waves = mergedWaves.map((w, idx) => ({ ...w, id: idx + 1 }));
   }
 
   if (Array.isArray(input.miniBosses)) {

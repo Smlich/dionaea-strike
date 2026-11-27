@@ -1,5 +1,7 @@
+import { getDifficultyProfile } from './difficulty';
 import type {
   ComboRank,
+  DifficultyId,
   EnemyArchetypeId,
   FusedLoadout,
   GameConfig,
@@ -816,19 +818,30 @@ export function pickFrogTongueTarget(
 /**
  * Escala velocidad de proyectiles enemigos según el nivel (Nv.1 mucho más calmo, acelerando hacia Nv.5).
  */
-export function computeEnemyBulletSpeedMult(levelIndex = 1): number {
+export function computeEnemyBulletSpeedMult(
+  levelIndex = 1,
+  difficulty: DifficultyId = 'normal'
+): number {
+  const diffMult = getDifficultyProfile(difficulty).enemyBulletSpeedMult;
+  let base = 0.72;
   switch (levelIndex) {
     case 1:
-      return 0.72;
+      base = 0.72;
+      break;
     case 2:
-      return 0.88;
+      base = 0.88;
+      break;
     case 3:
-      return 0.98;
+      base = 0.98;
+      break;
     case 4:
-      return 1.08;
+      base = 1.08;
+      break;
     default:
-      return levelIndex >= 5 ? 1.18 : 0.72;
+      base = levelIndex >= 5 ? 1.18 : 0.72;
+      break;
   }
+  return Number((base * diffMult).toFixed(3));
 }
 
 /**
@@ -861,13 +874,17 @@ export function computeLevelEnemyStats(
   baseHp: number,
   baseSpeed: number,
   baseFireInterval: number,
-  levelIndex = 1
+  levelIndex = 1,
+  difficulty: DifficultyId = 'normal',
+  dynamicVelocityMult = 1
 ): { hp: number; speed: number; fireInterval: number } {
   const lvlOffset = Math.max(0, levelIndex - 1);
   const fireScale = levelIndex === 1 ? 1.22 : Math.max(0.6, 1 - lvlOffset * 0.06);
+  const diffProfile = getDifficultyProfile(difficulty);
+  const safeDynVel = Number.isFinite(dynamicVelocityMult) && dynamicVelocityMult > 0 ? dynamicVelocityMult : 1;
   return {
     hp: Math.round(baseHp * (1 + lvlOffset * 0.18)),
-    speed: Math.round(baseSpeed * (1 + lvlOffset * 0.07)),
+    speed: Math.round(baseSpeed * (1 + lvlOffset * 0.07) * diffProfile.enemySpeedMult * safeDynVel),
     fireInterval: Math.max(0.55, Number((baseFireInterval * fireScale).toFixed(2))),
   };
 }
@@ -884,7 +901,9 @@ export function stepEnemyBehavior(
   worldHeight: number,
   config: GameConfig,
   attackTokensAvailable: number,
-  levelIndex = 1
+  levelIndex = 1,
+  difficulty: DifficultyId = 'normal',
+  dynamicVelocityMult = 1
 ): {
   shouldFire: boolean;
   fireKind: 'single' | 'spread' | 'sniper' | 'stinger' | 'bomb' | 'twin';
@@ -947,15 +966,26 @@ export function stepEnemyBehavior(
   }
 
   const enemyCfg = config.enemies[enemy.archetype];
-  const scaled = computeLevelEnemyStats(enemyCfg.hp, enemyCfg.speed, enemyCfg.fireInterval, levelIndex);
+  const diffProfile = getDifficultyProfile(difficulty);
+  const safeDynVel = Number.isFinite(dynamicVelocityMult) && dynamicVelocityMult > 0 ? dynamicVelocityMult : 1;
+  const combinedSpeedMult = diffProfile.enemySpeedMult * safeDynVel;
+  const scaled = computeLevelEnemyStats(
+    enemyCfg.hp,
+    enemyCfg.speed,
+    enemyCfg.fireInterval,
+    levelIndex,
+    difficulty,
+    safeDynVel
+  );
   const baseSpeed = scaled.speed * speedMult;
+  const moveMult = speedMult * combinedSpeedMult;
 
   switch (enemy.archetype) {
     case 'drone': {
       // IA 1: Mosca Exploradora — oleada sinusoidal ágil que acelera suavemente en niveles altos
       const waveFreq = 2.7 + (levelIndex - 1) * 0.28;
       enemy.vx = -baseSpeed;
-      enemy.vy = Math.cos(enemy.age * waveFreq + enemy.phaseOffset) * 96 * speedMult;
+      enemy.vy = Math.cos(enemy.age * waveFreq + enemy.phaseOffset) * 96 * moveMult;
       break;
     }
 
@@ -1026,20 +1056,20 @@ export function stepEnemyBehavior(
 
     case 'flanker': {
       // IA 5: Cazador Orbital — describe elipses amplias barriendo arriba y abajo mientras avanza
-      enemy.orbitCenterX = Math.max(worldWidth * 0.4, enemy.orbitCenterX - 46 * dt * speedMult);
-      enemy.orbitCenterY += Math.sin(enemy.age * 1.15 + enemy.phaseOffset) * 38 * dt;
+      enemy.orbitCenterX = Math.max(worldWidth * 0.4, enemy.orbitCenterX - 46 * dt * moveMult);
+      enemy.orbitCenterY += Math.sin(enemy.age * 1.15 + enemy.phaseOffset) * 38 * dt * combinedSpeedMult;
       const tx = enemy.orbitCenterX + Math.cos(enemy.age * 3.3 + enemy.phaseOffset) * 74;
       const ty = enemy.orbitCenterY + Math.sin(enemy.age * 3.3 + enemy.phaseOffset) * 124;
-      enemy.vx = (tx - enemy.x) * 3.0 * speedMult;
-      enemy.vy = (ty - enemy.y) * 3.4 * speedMult;
+      enemy.vx = (tx - enemy.x) * 3.0 * moveMult;
+      enemy.vy = (ty - enemy.y) * 3.4 * moveMult;
       break;
     }
 
     case 'hornet': {
       // IA 6: Avispón Guardia — escolta real en patrón figura-8 barriendo el flanco derecho
-      const patrolX = Math.max(worldWidth * 0.54, worldWidth - 190 - enemy.age * 20);
-      enemy.vx = enemy.x > patrolX ? -baseSpeed * 1.05 : Math.sin(enemy.age * 4.2 + enemy.phaseOffset) * 62 * speedMult;
-      enemy.vy = Math.cos(enemy.age * 2.35 + enemy.phaseOffset) * 168 * speedMult;
+      const patrolX = Math.max(worldWidth * 0.54, worldWidth - 190 - enemy.age * 20 * combinedSpeedMult);
+      enemy.vx = enemy.x > patrolX ? -baseSpeed * 1.05 : Math.sin(enemy.age * 4.2 + enemy.phaseOffset) * 62 * moveMult;
+      enemy.vy = Math.cos(enemy.age * 2.35 + enemy.phaseOffset) * 168 * moveMult;
       break;
     }
 
@@ -1049,9 +1079,9 @@ export function stepEnemyBehavior(
       enemy.lungeTimer -= dt;
       if (enemy.lungeTimer <= 0) {
         enemy.lungeTimer = 1.0 + (enemy.phaseOffset % 0.35);
-        enemy.vy = -275 * speedMult;
+        enemy.vy = -275 * moveMult;
       } else {
-        enemy.vy += 480 * dt * speedMult;
+        enemy.vy += 480 * dt * moveMult;
       }
       break;
     }
@@ -1060,7 +1090,7 @@ export function stepEnemyBehavior(
       // IA 8: Escarabajo Galeón — bombardero pesado en carril alto soltando bombas rebotantes
       const targetLaneY = worldHeight * (0.21 + Math.sin(enemy.age * 1.15 + enemy.phaseOffset) * 0.09);
       enemy.vx = -baseSpeed * 0.88;
-      enemy.vy = (targetLaneY - enemy.y) * 2.6 * speedMult;
+      enemy.vy = (targetLaneY - enemy.y) * 2.6 * moveMult;
       break;
     }
   }
@@ -1407,7 +1437,7 @@ export function computeBeatSpawnEvents(
   beatsPerSpawn: number
 ): { count: number; hasDownbeat: boolean; lastSlotIndex: number } {
   const safeBpm = Math.max(40, bpm);
-  const slotSec = (60 / safeBpm) * Math.max(0.5, beatsPerSpawn);
+  const slotSec = (60 / safeBpm) * Math.max(0.25, beatsPerSpawn);
   const prevRel = prevTimeSec - firstDropSec;
   const nextRel = nextTimeSec - firstDropSec;
 

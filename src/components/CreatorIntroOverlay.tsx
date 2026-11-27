@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SkipForward, Volume2, VolumeX } from 'lucide-react';
 
-export const CREATOR_INTRO_VIDEO_PATH = '/assets/aistudio/gemini_generated_video_832af8a2_66b49cec.webm';
+export const CREATOR_INTRO_VIDEO_PATH = 'assets/video/intro.webm';
 
 interface CreatorIntroOverlayProps {
   assetBasePath?: string;
@@ -14,14 +14,14 @@ interface CreatorIntroOverlayProps {
 
 function resolveIntroUrl(basePath: string | undefined, path: string): string {
   if (/^https?:\/\//i.test(path)) return path;
-  if (!basePath || basePath === '/') return path;
-  const cleanBase = basePath.replace(/\/+$/, '');
-  const cleanPath = path.startsWith('/') ? path : `/${path}`;
-  return `${cleanBase}${cleanPath}`;
+  const relative = path.replace(/^\/+/, '');
+  const trimmed = basePath ? basePath.replace(/\/+$/, '') : '';
+  if (!trimmed || trimmed === '/' || trimmed === '.') return `./${relative}`;
+  return `${trimmed}/${relative}`;
 }
 
 export function CreatorIntroOverlay({
-  assetBasePath = '/',
+  assetBasePath = '.',
   initialMuted = false,
   volume = 0.8,
   exitRequested = false,

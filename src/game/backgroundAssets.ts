@@ -47,7 +47,7 @@ function buildSeamlessPanoramaCanvas(img: HTMLImageElement): HTMLCanvasElement |
   const outCanvas = document.createElement('canvas');
   outCanvas.width = tileW;
   outCanvas.height = h;
-  const outCtx = outCanvas.getContext('2d');
+  const outCtx = outCanvas.getContext('2d', { alpha: false });
   if (!outCtx) return null;
 
   // Base image covering [0 .. tileW] from source [0 .. tileW]
@@ -115,6 +115,14 @@ function ensureLoaded(landscape: LandscapeId): CachedBackdropImage | null {
   };
   img.src = STAGE_BACKGROUND_URLS[landscape];
   return entry;
+}
+
+/**
+ * Precarga una ilustración de fondo terrestre específica bajo demanda (minimiza la descarga inicial).
+ */
+export function preloadStageBackground(landscape: LandscapeId): void {
+  if (typeof window === 'undefined') return;
+  ensureLoaded(landscape);
 }
 
 /**

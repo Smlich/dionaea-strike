@@ -17,7 +17,9 @@ import {
   Zap,
 } from 'lucide-react';
 import { soundEngine } from '../game/audio';
-import { preloadStageBackgrounds } from '../game/backgroundAssets';
+import { preloadStageBackground } from '../game/backgroundAssets';
+import { loadDifficulty, saveDifficulty } from '../game/difficulty';
+import { pokiSdk } from '../game/pokiSdk';
 import {
   computeGamepadEdges,
   computeLogicalViewport,
@@ -47,9 +49,17 @@ import {
   resetGlobalHighScoreState,
 } from '../game/highScoreStore';
 import { GameSimulation } from '../game/simulation';
-import type { GameConfig, GameStatus, GlobalHighScoreState, HudSnapshot, PetId } from '../game/types';
+import type {
+  DifficultyId,
+  GameConfig,
+  GameStatus,
+  GlobalHighScoreState,
+  HudSnapshot,
+  PetId,
+} from '../game/types';
 import { AdminConfigModal } from './AdminConfigModal';
 import { CreatorIntroOverlay } from './CreatorIntroOverlay';
+import { DifficultySelector } from './DifficultySelector';
 import { GameHud } from './GameHud';
 import { HighScoreModal } from './HighScoreModal';
 import { PetEmblem, SpeciesEmblem, TitleLogoLockup } from './SpeciesIcons';
@@ -150,6 +160,10 @@ function createInitialHud(cfg: GameConfig): HudSnapshot {
     enemiesDefeated: 0,
     damageTaken: 0,
     elapsedSec: 0,
+    difficulty: loadDifficulty(),
+    dynamicVelocityMult: 1,
+    dynamicSpawnRateMult: 1,
+    escalationTier: 0,
   };
 }
 
@@ -157,6 +171,10 @@ function getInitialStatus(): GameStatus {
   if (typeof window === 'undefined') return 'title';
   const params = new URLSearchParams(window.location.search);
   if (params.get('autostart') === '1' || params.get('skipIntro') === '1') {
+    return 'title';
+  }
+  // Skip the pre-title video on Poki / iframe portals to maximize Conversion-to-Play (C2P).
+  if (pokiSdk.isEmbeddedInPortal()) {
     return 'title';
   }
   return 'intro';
@@ -167,7 +185,7 @@ export function CarnivoraShmupGame({
   initialConfig,
   onConfigChange,
   onScoreSubmit,
-  assetBasePath = '/',
+  assetBasePath = '.',
 }: CarnivoraShmupGameProps) {
   const [config, setConfig] = useState<GameConfig>(() => initialConfig ?? loadGameConfig());
   const [status, setStatus] = useState<GameStatus>(() => getInitialStatus());
@@ -209,6 +227,7 @@ export function CarnivoraShmupGame({
   const showRecordsRef = useRef<boolean>(false);
   const onScoreSubmitRef = useRef(onScoreSubmit);
   const submittedRunRef = useRef<boolean>(false);
+  const adBreakBusyRef = useRef<boolean>(false);
   const touchMoveRef = useRef<{
     pointerId: number;
     anchorPlayerX: number;
@@ -249,7 +268,12 @@ export function CarnivoraShmupGame({
 
     if (status === 'playing') {
       submittedRunRef.current = false;
-    } else if (status === 'title' || status === 'paused' || status === 'level_clear') {
+      pokiSdk.notifyGameplayStart();
+    } else {
+      pokiSdk.notifyGameplayStop();
+    }
+
+    if (status === 'title' || status === 'paused' || status === 'level_clear') {
       setGlobalRecords(loadGlobalHighScoreState());
     } else if ((status === 'gameover' || status === 'victory') && !submittedRunRef.current) {
       submittedRunRef.current = true;
@@ -268,6 +292,20 @@ export function CarnivoraShmupGame({
       });
     }
   }, [status]);
+
+  useEffect(() => {
+    const nextVel = hud.dynamicVelocityMult.toFixed(2);
+    const nextSpawn = hud.dynamicSpawnRateMult.toFixed(2);
+    if (document.body.dataset.difficulty !== hud.difficulty) {
+      document.body.dataset.difficulty = hud.difficulty;
+    }
+    if (document.body.dataset.velocityMult !== nextVel) {
+      document.body.dataset.velocityMult = nextVel;
+    }
+    if (document.body.dataset.spawnMult !== nextSpawn) {
+      document.body.dataset.spawnMult = nextSpawn;
+    }
+  }, [hud.difficulty, hud.dynamicVelocityMult, hud.dynamicSpawnRateMult]);
 
   // Keep global high scores synchronized across multiple browser tabs in real time
   useEffect(() => {
@@ -291,9 +329,14 @@ export function CarnivoraShmupGame({
   useEffect(() => {
     soundEngine.syncMusic(status, hud.levelIndex);
     if (status === 'level_clear') {
-      soundEngine.preloadGameAudio(hud.clearedLevelSummary?.nextLevel ?? hud.levelIndex);
+      const nextLv = hud.clearedLevelSummary?.nextLevel ?? hud.levelIndex;
+      soundEngine.preloadGameAudio(nextLv);
+      const nextWave = config.waves.find((w) => w.level === nextLv);
+      if (nextWave) {
+        preloadStageBackground(nextWave.landscape);
+      }
     }
-  }, [status, hud.levelIndex, hud.clearedLevelSummary?.nextLevel]);
+  }, [status, hud.levelIndex, hud.clearedLevelSummary?.nextLevel, config.waves]);
 
   useEffect(() => {
     soundEngine.syncMusicTempo(status === 'playing' && hud.bossActive, hud.bossPhase);
@@ -313,6 +356,7 @@ export function CarnivoraShmupGame({
   }, []);
 
   const handleResetRecords = useCallback(() => {
+    soundEngine.playUiCancel();
     const cleared = resetGlobalHighScoreState();
     setGlobalRecords(cleared);
     simRef.current?.refreshHighScore();
@@ -325,6 +369,7 @@ export function CarnivoraShmupGame({
   }, []);
 
   const handleReturnToTitle = useCallback(() => {
+    soundEngine.playUiCancel();
     simRef.current?.finalizeRunRecord(false);
     setGlobalRecords(loadGlobalHighScoreState());
     setTitleRevealFromIntro(false);
@@ -430,6 +475,7 @@ export function CarnivoraShmupGame({
   );
 
   const handleToggleFullscreen = useCallback(async () => {
+    soundEngine.playUiClick();
     try {
       if (document.fullscreenElement) {
         await document.exitFullscreen();
@@ -441,10 +487,12 @@ export function CarnivoraShmupGame({
     }
   }, [requestMobileLandscapeFullscreen]);
 
-  const handleStart = useCallback(() => {
+  const launchFreshRun = useCallback(() => {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
+    soundEngine.unlockMusicOnGesture();
+    soundEngine.playUiConfirm();
     setIntroOverlayMounted(false);
     setIntroExitRequested(false);
     if (isTouchDevice) {
@@ -459,13 +507,48 @@ export function CarnivoraShmupGame({
     canvasRef.current?.focus();
   }, [isTouchDevice, requestMobileLandscapeFullscreen]);
 
+  const runWithCommercialBreak = useCallback(async (action: () => void) => {
+    if (adBreakBusyRef.current) return;
+    adBreakBusyRef.current = true;
+    try {
+      simRef.current?.clearInputs();
+      await pokiSdk.requestCommercialBreak({
+        onBeforeAd: () => {
+          simRef.current?.clearInputs();
+          soundEngine.setSystemMuted(true);
+        },
+        onAfterAd: () => {
+          if (typeof document === 'undefined' || !document.hidden) {
+            soundEngine.setSystemMuted(false);
+          }
+        },
+      });
+      action();
+    } finally {
+      adBreakBusyRef.current = false;
+    }
+  }, []);
+
+  /** First-session Start from Title Screen: immediate gameplay with zero pre-roll commercial break (Poki QA rule). */
+  const handleStart = useCallback(() => {
+    if (adBreakBusyRef.current) return;
+    launchFreshRun();
+  }, [launchFreshRun]);
+
+  /** Retry / Restart transition back into gameplay: requests a Poki commercial break cleanly if available. */
+  const handleRetryWithAd = useCallback(() => {
+    void runWithCommercialBreak(launchFreshRun);
+  }, [launchFreshRun, runWithCommercialBreak]);
+
   const handleTogglePause = useCallback(() => {
     const sim = simRef.current;
     if (!sim) return;
     if (statusRef.current === 'playing') {
+      soundEngine.playUiClick();
       sim.clearInputs();
       sim.setStatus('paused');
     } else if (statusRef.current === 'paused') {
+      soundEngine.playUiConfirm();
       sim.clearInputs();
       sim.setStatus('playing');
       canvasRef.current?.focus();
@@ -476,6 +559,9 @@ export function CarnivoraShmupGame({
     setMuted((prev) => {
       const next = !prev;
       soundEngine.setMuted(next);
+      if (!next) {
+        soundEngine.playUiToggle(true);
+      }
       return next;
     });
   }, []);
@@ -526,30 +612,50 @@ export function CarnivoraShmupGame({
   }, []);
 
   const handleSelectPet = useCallback((petId: PetId) => {
+    soundEngine.unlockMusicOnGesture();
+    soundEngine.playUiClick();
     simRef.current?.setSelectedPet(petId);
+  }, []);
+
+  const handleSelectDifficulty = useCallback((next: DifficultyId) => {
+    soundEngine.unlockMusicOnGesture();
+    soundEngine.playUiClick();
+    if (simRef.current) {
+      simRef.current.setDifficulty(next);
+    } else {
+      const saved = saveDifficulty(next);
+      setHud((prev) => ({ ...prev, difficulty: saved }));
+    }
   }, []);
 
   const handleContinueNextLevel = useCallback(() => {
     const sim = simRef.current;
-    if (!sim || statusRef.current !== 'level_clear') return;
+    if (!sim || statusRef.current !== 'level_clear' || adBreakBusyRef.current) return;
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
-    sim.continueToNextLevel();
-    soundEngine.restartLevelMusic(hud.clearedLevelSummary?.nextLevel ?? hud.levelIndex);
-    canvasRef.current?.focus();
-  }, [hud.clearedLevelSummary?.nextLevel, hud.levelIndex]);
+    void runWithCommercialBreak(() => {
+      const liveSim = simRef.current;
+      if (!liveSim || statusRef.current !== 'level_clear') return;
+      if (liveSim.continueToNextLevel()) {
+        soundEngine.playUiConfirm();
+        soundEngine.restartLevelMusic(liveSim.getLevelIndex());
+        canvasRef.current?.focus();
+      }
+    });
+  }, [runWithCommercialBreak]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
 
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
 
-    preloadStageBackgrounds();
-    soundEngine.preloadGameAudio(1);
+    // Lazy-preload only Level 1 backdrop and Menu audio to keep initial download lean for Poki C2P.
+    preloadStageBackground('pampa_dawn');
+    soundEngine.preloadGameAudio();
 
     const sim = new GameSimulation(
       config,
@@ -558,14 +664,30 @@ export function CarnivoraShmupGame({
     );
     simRef.current = sim;
 
+    // Initialize Poki SDK v2 safely (works seamlessly with adblockers or standalone web hosts).
+    void pokiSdk.init().finally(() => {
+      pokiSdk.notifyLoadingFinished();
+      document.body.dataset.pokiReady = '1';
+    });
+
+    // Cap DPR at 1.5x (44% fewer pixels on Retina/mobile while remaining crisp) and allow
+    // automatic step-down to 1.0x if sustained frame time exceeds 23ms on slower GPUs.
+    let adaptiveDprCap = 1.5;
+    let activeDpr = Math.min(window.devicePixelRatio || 1, adaptiveDprCap);
+
     const updateSize = () => {
       const rect = container.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.min(window.devicePixelRatio || 1, adaptiveDprCap);
+      activeDpr = dpr;
       const vp = computeLogicalViewport(rect.width, rect.height);
       worldScaleRef.current = vp.scale;
       canvas.width = Math.round(vp.cssWidth * dpr);
       canvas.height = Math.round(vp.cssHeight * dpr);
       ctx.setTransform(dpr * vp.scale, 0, 0, dpr * vp.scale, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      if ('imageSmoothingQuality' in ctx) {
+        ctx.imageSmoothingQuality = 'low';
+      }
       sim.resize(vp.logicalWidth, vp.logicalHeight);
       sim.render(ctx);
     };
@@ -593,6 +715,17 @@ export function CarnivoraShmupGame({
     let prevGamepad: GamepadMappedInput | null = null;
     let prevTitleCycleLeft = false;
     let prevTitleCycleRight = false;
+    let slowFrameStreak = 0;
+    let gamepadPollingActive = forceXbox;
+    if (!gamepadPollingActive && typeof navigator !== 'undefined' && navigator.getGamepads) {
+      const initialPads = navigator.getGamepads();
+      for (let i = 0; i < initialPads.length; i++) {
+        if (initialPads[i]?.connected) {
+          gamepadPollingActive = true;
+          break;
+        }
+      }
+    }
 
     const cycleTitlePet = (dir: -1 | 1) => {
       const unlocked = loadUnlockedPets();
@@ -605,6 +738,7 @@ export function CarnivoraShmupGame({
     };
 
     const pollGamepad = () => {
+      if (!gamepadPollingActive) return;
       const pads = typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : [];
       let activePad: Gamepad | null = null;
       for (let i = 0; i < pads.length; i++) {
@@ -622,6 +756,9 @@ export function CarnivoraShmupGame({
         prevGamepad = null;
         prevTitleCycleLeft = false;
         prevTitleCycleRight = false;
+        if (!forceXbox) {
+          gamepadPollingActive = false;
+        }
         return;
       }
 
@@ -681,14 +818,20 @@ export function CarnivoraShmupGame({
       } else if (cur === 'level_clear') {
         if (edges.confirmPressed || edges.pausePressed) {
           soundEngine.unlockMusicOnGesture();
-          sim.continueToNextLevel();
-          soundEngine.restartLevelMusic(sim.getLevelIndex());
+          void runWithCommercialBreak(() => {
+            if (statusRef.current === 'level_clear' && sim.continueToNextLevel()) {
+              soundEngine.playUiConfirm();
+              soundEngine.restartLevelMusic(sim.getLevelIndex());
+            }
+          });
         }
       } else if (cur === 'gameover' || cur === 'victory') {
         if (edges.confirmPressed || edges.pausePressed) {
           soundEngine.unlockMusicOnGesture();
-          sim.startNewGame();
-          soundEngine.restartLevelMusic(1);
+          void runWithCommercialBreak(() => {
+            sim.startNewGame();
+            soundEngine.restartLevelMusic(1);
+          });
         }
       }
     };
@@ -699,7 +842,8 @@ export function CarnivoraShmupGame({
     };
 
     const frame = (now: number) => {
-      const dt = (now - lastTime) / 1000;
+      const frameMs = now - lastTime;
+      const dt = frameMs / 1000;
       lastTime = now;
 
       pollGamepad();
@@ -709,6 +853,21 @@ export function CarnivoraShmupGame({
         sim.step(dt);
         sim.render(ctx);
         lastDrawnStatus = curStatus;
+
+        // Adaptive DPR governor: if sustained gameplay frames exceed 23ms while DPR > 1,
+        // step down DPR smoothly to keep gameplay locked at 60 FPS on integrated/mobile GPUs.
+        if (activeDpr > 1.01 && frameMs < 120) {
+          if (frameMs > 23) {
+            slowFrameStreak++;
+            if (slowFrameStreak >= 45) {
+              slowFrameStreak = 0;
+              adaptiveDprCap = Math.max(1, Number((activeDpr - 0.25).toFixed(2)));
+              updateSize();
+            }
+          } else if (slowFrameStreak > 0) {
+            slowFrameStreak = Math.max(0, slowFrameStreak - 2);
+          }
+        }
       } else if (lastDrawnStatus !== curStatus) {
         sim.render(ctx);
         lastDrawnStatus = curStatus;
@@ -729,7 +888,28 @@ export function CarnivoraShmupGame({
     };
     rafId = requestAnimationFrame(frame);
 
+    const isEditableTarget = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) return false;
+      const tag = target.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+    };
+
     const onKeyDown = (e: KeyboardEvent) => {
+      if (adBreakBusyRef.current) {
+        if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
+          e.preventDefault();
+        }
+        return;
+      }
+
+      // Poki QA: prevent Arrow keys & Space from scrolling the host page across all game screens.
+      if (
+        !isEditableTarget(e.target) &&
+        ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)
+      ) {
+        e.preventDefault();
+      }
+
       if (showAdminRef.current) {
         if (e.code === 'Escape') setShowAdmin(false);
         return;
@@ -771,8 +951,12 @@ export function CarnivoraShmupGame({
         soundEngine.unlockMusicOnGesture();
         if (e.code === 'Enter' || e.code === 'Space') {
           e.preventDefault();
-          sim.continueToNextLevel();
-          soundEngine.restartLevelMusic(sim.getLevelIndex());
+          void runWithCommercialBreak(() => {
+            if (statusRef.current === 'level_clear' && sim.continueToNextLevel()) {
+              soundEngine.playUiConfirm();
+              soundEngine.restartLevelMusic(sim.getLevelIndex());
+            }
+          });
         }
         return;
       }
@@ -790,8 +974,10 @@ export function CarnivoraShmupGame({
       }
 
       if (e.code === 'KeyR' && statusRef.current === 'playing') {
-        sim.startNewGame();
-        soundEngine.restartLevelMusic(1);
+        void runWithCommercialBreak(() => {
+          sim.startNewGame();
+          soundEngine.restartLevelMusic(1);
+        });
         return;
       }
 
@@ -808,8 +994,27 @@ export function CarnivoraShmupGame({
       sim.handleKeyUp(e.code);
     };
 
-    const clearOnBlur = () => {
+    const suspendOnBlurOrHide = () => {
       sim.clearInputs();
+      touchMoveRef.current = null;
+      soundEngine.setSystemMuted(true);
+      if (statusRef.current === 'playing') {
+        sim.setStatus('paused');
+      }
+    };
+
+    const resumeOnFocusOrShow = () => {
+      if (!document.hidden && !pokiSdk.isCommercialBreakActive()) {
+        soundEngine.setSystemMuted(false);
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        suspendOnBlurOrHide();
+      } else {
+        resumeOnFocusOrShow();
+      }
     };
 
     const unlockOnPointer = () => {
@@ -817,10 +1022,12 @@ export function CarnivoraShmupGame({
     };
 
     const onGamepadConnected = () => {
+      gamepadPollingActive = true;
       sim.setGamepadState(true, 0, 0, false);
     };
     const onGamepadDisconnected = () => {
       if (!forceXbox) {
+        gamepadPollingActive = false;
         sim.setGamepadState(false, 0, 0, false);
       }
     };
@@ -828,13 +1035,16 @@ export function CarnivoraShmupGame({
     window.addEventListener('pointerdown', unlockOnPointer, { passive: true });
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
-    window.addEventListener('blur', clearOnBlur);
+    window.addEventListener('blur', suspendOnBlurOrHide);
+    window.addEventListener('focus', resumeOnFocusOrShow);
     window.addEventListener('gamepadconnected', onGamepadConnected);
     window.addEventListener('gamepaddisconnected', onGamepadDisconnected);
-    document.addEventListener('visibilitychange', clearOnBlur);
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
       disposed = true;
+      pokiSdk.notifyGameplayStop();
+      soundEngine.setSystemMuted(false);
       soundEngine.stopMusic();
       cancelAnimationFrame(rafId);
       clearTimeout(yieldTimer);
@@ -844,10 +1054,11 @@ export function CarnivoraShmupGame({
       window.removeEventListener('pointerdown', unlockOnPointer);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('blur', clearOnBlur);
+      window.removeEventListener('blur', suspendOnBlurOrHide);
+      window.removeEventListener('focus', resumeOnFocusOrShow);
       window.removeEventListener('gamepadconnected', onGamepadConnected);
       window.removeEventListener('gamepaddisconnected', onGamepadDisconnected);
-      document.removeEventListener('visibilitychange', clearOnBlur);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -875,7 +1086,15 @@ export function CarnivoraShmupGame({
   const selectedPetInfo = PET_CATALOG.find((p) => p.id === hud.petId) ?? PET_CATALOG[0];
 
   return (
-    <div ref={containerRef} className="relative w-full h-dvh overflow-hidden select-none bg-[#08101C]">
+    <div
+      ref={containerRef}
+      onContextMenu={(e) => {
+        if (!showAdminRef.current) {
+          e.preventDefault();
+        }
+      }}
+      className="relative w-full h-dvh overflow-hidden select-none bg-[#08101C]"
+    >
       <canvas
         ref={canvasRef}
         data-testid="game-canvas"
@@ -1039,6 +1258,7 @@ export function CarnivoraShmupGame({
                   type="button"
                   onClick={() => {
                     soundEngine.unlockMusicOnGesture();
+                    soundEngine.playUiClick();
                     setShowAudioPopover((prev) => !prev);
                   }}
                   aria-expanded={showAudioPopover}
@@ -1157,6 +1377,8 @@ export function CarnivoraShmupGame({
                       type="button"
                       data-testid="open-records-btn"
                       onClick={() => {
+                        soundEngine.unlockMusicOnGesture();
+                        soundEngine.playUiClick();
                         setGlobalRecords(loadGlobalHighScoreState());
                         setShowRecordsModal(true);
                       }}
@@ -1280,21 +1502,23 @@ export function CarnivoraShmupGame({
                   </div>
                 </div>
 
-                {/* Block 3: Primary CTA + Compact Audio Mixer + Arsenal */}
-                <div className="w-full max-w-2xl flex flex-col gap-2">
+                {/* Block 3: Difficulty Selector + Primary CTA + Compact Audio Mixer + Arsenal */}
+                <div className="w-full max-w-2xl flex flex-col gap-2 [@media(max-height:540px)]:gap-1.5">
+                  <DifficultySelector value={hud.difficulty} onChange={handleSelectDifficulty} />
+
                   <div className="w-full flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2.5">
                     <button
                       type="button"
                       data-start="true"
                       onClick={handleStart}
-                      className="touch-manipulation w-full sm:w-auto [@media(max-height:540px)]:w-full min-h-[46px] [@media(max-height:540px)]:min-h-[42px] inline-flex items-center justify-center gap-2.5 px-6 py-2.5 [@media(max-height:540px)]:py-2 rounded-xl bg-[#E11D48] hover:bg-[#BE123C] text-white font-display font-black text-sm sm:text-base tracking-wide border-2 border-[#050810] shadow-[0_4px_0_#050810] active:translate-y-0.5 transition-transform cursor-pointer whitespace-nowrap"
+                      className="touch-manipulation w-full sm:w-auto [@media(max-height:540px)]:w-full min-h-[46px] [@media(max-height:540px)]:min-h-[40px] inline-flex items-center justify-center gap-2.5 px-6 py-2.5 [@media(max-height:540px)]:py-1.5 rounded-xl bg-[#E11D48] hover:bg-[#BE123C] text-white font-display font-black text-sm sm:text-base tracking-wide border-2 border-[#050810] shadow-[0_4px_0_#050810] active:translate-y-0.5 transition-transform cursor-pointer whitespace-nowrap"
                     >
                       {isXbox && (
                         <span className="w-5 h-5 rounded-full bg-[#107C10] border border-emerald-200 text-[11px] font-mono font-black inline-flex items-center justify-center shadow-inner">
                           A
                         </span>
                       )}
-                      <span>Iniciar Misión</span>
+                      <span>Start</span>
                       <ArrowRight className="w-4 h-4" />
                     </button>
 
@@ -1458,7 +1682,7 @@ export function CarnivoraShmupGame({
           onToggleFullscreen={handleToggleFullscreen}
           onToggleMute={handleToggleMute}
           onPause={handleTogglePause}
-          onRestart={handleStart}
+          onRestart={handleRetryWithAd}
           onTriggerSpecial={() => simRef.current?.triggerSpecialPulse()}
           onFireSecondary={() => simRef.current?.fireSecondaryAbility()}
           onSwapAbilities={() => simRef.current?.swapActiveAbilities()}
@@ -1619,6 +1843,14 @@ export function CarnivoraShmupGame({
               </div>
             </div>
 
+            {/* Pause Difficulty Selector */}
+            <DifficultySelector
+              compact
+              value={hud.difficulty}
+              onChange={handleSelectDifficulty}
+              testIdPrefix="pause-difficulty"
+            />
+
             {/* Pause Audio Volume Controls */}
             <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2.5 text-left">
               <label className="flex flex-col gap-1 text-xs font-semibold text-slate-200">
@@ -1679,7 +1911,7 @@ export function CarnivoraShmupGame({
               </button>
               <button
                 type="button"
-                onClick={handleStart}
+                onClick={handleRetryWithAd}
                 className="touch-manipulation w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 font-semibold text-sm border border-slate-700 cursor-pointer"
               >
                 Reiniciar
@@ -1786,7 +2018,7 @@ export function CarnivoraShmupGame({
               <button
                 type="button"
                 data-start="true"
-                onClick={handleStart}
+                onClick={handleRetryWithAd}
                 className="touch-manipulation w-full py-2.5 sm:py-3 rounded-xl bg-[#E11D48] hover:bg-[#BE123C] text-white font-display font-extrabold text-sm border-2 border-[#0B1120] shadow-[0_3px_0_#0B1120] inline-flex items-center justify-center gap-2 cursor-pointer"
               >
                 {isXbox && (
@@ -1800,6 +2032,7 @@ export function CarnivoraShmupGame({
                 <button
                   type="button"
                   onClick={() => {
+                    soundEngine.playUiClick();
                     setGlobalRecords(loadGlobalHighScoreState());
                     setShowRecordsModal(true);
                   }}
@@ -1811,7 +2044,10 @@ export function CarnivoraShmupGame({
                 {isAdmin && (
                   <button
                     type="button"
-                    onClick={() => setShowAdmin(true)}
+                    onClick={() => {
+                      soundEngine.playUiClick();
+                      setShowAdmin(true);
+                    }}
                     className="touch-manipulation flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 font-semibold text-xs border border-slate-700 cursor-pointer whitespace-nowrap"
                   >
                     Administrar
@@ -1835,7 +2071,10 @@ export function CarnivoraShmupGame({
         <HighScoreModal
           records={globalRecords}
           onResetRecords={handleResetRecords}
-          onClose={() => setShowRecordsModal(false)}
+          onClose={() => {
+            soundEngine.playUiCancel();
+            setShowRecordsModal(false);
+          }}
         />
       )}
 

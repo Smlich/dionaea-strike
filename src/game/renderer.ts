@@ -11,6 +11,8 @@ import type {
   SpeciesLevels,
 } from './types';
 import type { FrogCompanionState, SimEnemyState } from './fusionRules';
+import type { Particle } from './particles';
+export type { Particle };
 
 // Precomputed 36-bucket HSL palette LUTs to avoid per-bullet per-frame string allocations in hot loops
 const BULLET_LUT_SIZE = 36;
@@ -22,6 +24,45 @@ const ENEMY_BULLET_CORE_LUT: string[] = Array.from({ length: BULLET_LUT_SIZE }, 
   const altHue = Math.round(((i / BULLET_LUT_SIZE) * 360 + 145) % 360);
   return `hsl(${altHue}, 100%, 72%)`;
 });
+
+// Per-context cached gradients to eliminate per-frame / per-enemy CanvasGradient allocations
+const wingGradientCache = new WeakMap<CanvasRenderingContext2D, CanvasGradient>();
+function getIridescentWingGradient(ctx: CanvasRenderingContext2D): CanvasGradient {
+  let grad = wingGradientCache.get(ctx);
+  if (!grad) {
+    grad = ctx.createLinearGradient(0, 0, 32, -16);
+    grad.addColorStop(0, 'rgba(244, 114, 182, 0.72)');
+    grad.addColorStop(0.5, 'rgba(168, 85, 247, 0.58)');
+    grad.addColorStop(1, 'rgba(56, 189, 248, 0.56)');
+    wingGradientCache.set(ctx, grad);
+  }
+  return grad;
+}
+
+const damageVignetteCache = new WeakMap<
+  CanvasRenderingContext2D,
+  { width: number; height: number; grad: CanvasGradient }
+>();
+function getDamageVignetteGradient(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number
+): CanvasGradient {
+  const cached = damageVignetteCache.get(ctx);
+  if (cached && cached.width === width && cached.height === height) {
+    return cached.grad;
+  }
+  const cx = width * 0.5;
+  const cy = height * 0.5;
+  const innerR = Math.max(1, Math.min(width, height) * 0.34);
+  const outerR = Math.max(innerR + 1, Math.hypot(cx, cy));
+  const grad = ctx.createRadialGradient(cx, cy, innerR, cx, cy, outerR);
+  grad.addColorStop(0, 'rgba(225, 29, 72, 0)');
+  grad.addColorStop(0.68, 'rgba(225, 29, 72, 0.22)');
+  grad.addColorStop(1, 'rgba(190, 18, 60, 0.55)');
+  damageVignetteCache.set(ctx, { width, height, grad });
+  return grad;
+}
 
 export interface PlayerBullet {
   active: boolean;
@@ -185,19 +226,6 @@ export interface BossState {
   windActiveTimer: number;
 }
 
-export interface Particle {
-  active: boolean;
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  life: number;
-  maxLife: number;
-  size: number;
-  color: string;
-  outlined: boolean;
-}
-
 export interface FloatingCallout {
   x: number;
   y: number;
@@ -220,6 +248,9 @@ export interface RenderState {
   landscapeBlend: number; // 0..1
   shakeX: number;
   shakeY: number;
+  shakeAngleRad?: number;
+  shakeOverscanScale?: number;
+  damageFlashAlpha?: number;
   playerX: number;
   playerY: number;
   playerVy: number;
@@ -3575,11 +3606,7 @@ function drawTitleArtIridescentWings(
     if (isFlash) {
       ctx.fillStyle = '#FFFFFF';
     } else {
-      const grad = ctx.createLinearGradient(0, 0, wl, -ww);
-      grad.addColorStop(0, 'rgba(244, 114, 182, 0.72)'); // Iridescent pink
-      grad.addColorStop(0.5, 'rgba(168, 85, 247, 0.58)'); // Translucent violet-purple
-      grad.addColorStop(1, 'rgba(56, 189, 248, 0.56)'); // Shimmering cyan tip
-      ctx.fillStyle = grad;
+      ctx.fillStyle = getIridescentWingGradient(ctx);
     }
 
     ctx.strokeStyle = isFlash ? '#FFFFFF' : '#4C1D95';
@@ -3704,21 +3731,16 @@ function drawArtificialFlightBalloonAndRockets(
   ctx.stroke();
 
   if (!isFlash) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.ellipse(bx, balloonY, brX, brY, 0, 0, Math.PI * 2);
-    ctx.clip();
+    // Center vertical stripe & specular shine fit naturally inside the balloon — no expensive ctx.clip()!
     ctx.fillStyle = stripeColor;
     ctx.beginPath();
-    ctx.ellipse(bx, balloonY, brX * 0.44, brY, 0, 0, Math.PI * 2);
+    ctx.ellipse(bx, balloonY, brX * 0.44, brY * 0.98, 0, 0, Math.PI * 2);
     ctx.fill();
-    // Balloon shine
     ctx.fillStyle = 'rgba(255, 255, 255, 0.38)';
     ctx.beginPath();
     ctx.ellipse(bx - brX * 0.42, balloonY - brY * 0.35, brX * 0.18, brY * 0.34, -0.25, 0, Math.PI * 2);
     ctx.fill();
-    ctx.restore();
-    // Re-stroke outline
+    // Crisp outer outline over stripe
     ctx.strokeStyle = INK;
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -3887,7 +3909,8 @@ function drawLevelSpecificWings(
 }
 
 /**
- * Draws anatomical & level-unique carapace armor textures INSIDE the clipped insect body!
+ * Draws anatomical & level-unique carapace armor textures bounded cleanly within the insect body
+ * (zero per-enemy ctx.clip() mask allocations for smooth 60fps combat waves).
  */
 function drawLevelCarapaceTexture(
   ctx: CanvasRenderingContext2D,
@@ -3896,96 +3919,120 @@ function drawLevelCarapaceTexture(
   beatPulse: number,
   archetype?: SimEnemyState['archetype']
 ) {
+  const halfH = r * 0.44;
   if (archetype === 'hornet') {
-    // True Wasp/Hornet black & warning-gold abdomen bands!
+    // True Wasp/Hornet black & warning-gold abdomen bands
     ctx.fillStyle = '#FACC15';
-    for (let s = -1; s <= 2; s++) {
-      ctx.fillRect(s * r * 0.34, -r, r * 0.15, r * 2);
+    for (let s = 0; s <= 2; s++) {
+      const bx = r * (-0.12 + s * 0.32);
+      const bh = halfH * (1 - s * 0.12);
+      ctx.fillRect(bx, -bh, r * 0.14, bh * 2);
     }
     return;
   }
 
   if (levelIndex === 1) {
-    // EXACT TITLE-SCREEN ART: Dark metallic gunmetal-slate segmented chitin plates + subtle metallic sheen!
+    // Dark metallic gunmetal-slate segmented chitin plates + subtle metallic sheen
     ctx.fillStyle = '#475569';
     ctx.beginPath();
-    ctx.ellipse(0, -r * 0.34, r * 0.78, r * 0.24, -0.05, 0, Math.PI * 2);
+    ctx.ellipse(r * 0.04, -r * 0.28, r * 0.64, r * 0.18, -0.05, 0, Math.PI * 2);
     ctx.fill();
 
     // Ribbed insectoid abdomen segments
     ctx.strokeStyle = '#0B1120';
-    ctx.lineWidth = 1.8;
+    ctx.lineWidth = 1.7;
+    ctx.beginPath();
     for (let s = 0; s < 3; s++) {
-      const sx = r * (0.05 + s * 0.27);
-      ctx.beginPath();
-      ctx.arc(sx, 0, r * 0.68, -Math.PI * 0.42, Math.PI * 0.42);
-      ctx.stroke();
+      const sx = r * (0.04 + s * 0.26);
+      const segH = r * (0.44 - s * 0.06);
+      ctx.moveTo(sx, -segH);
+      ctx.quadraticCurveTo(sx + r * 0.12, 0, sx, segH);
     }
+    ctx.stroke();
+
     // Subtle iridescent cyan-magenta edge rim light
     ctx.strokeStyle = 'rgba(192, 132, 252, 0.42)';
     ctx.lineWidth = 1.4;
     ctx.beginPath();
-    ctx.moveTo(-r * 0.4, -r * 0.48);
-    ctx.quadraticCurveTo(r * 0.2, -r * 0.56, r * 0.72, -r * 0.26);
+    ctx.moveTo(-r * 0.36, -r * 0.42);
+    ctx.quadraticCurveTo(r * 0.2, -r * 0.5, r * 0.66, -r * 0.24);
     ctx.stroke();
   } else if (levelIndex === 2) {
     // Level 2: Jungle rosettes + bioluminescent emerald/gold chitin sheen
-    ctx.fillStyle = '#022C22';
+    const innerRScale = 0.45 + beatPulse * 0.25;
     const spots: [number, number, number][] = [
-      [-r * 0.12, -r * 0.24, r * 0.16],
-      [r * 0.34, -r * 0.14, r * 0.19],
-      [r * 0.16, r * 0.26, r * 0.15],
+      [-r * 0.12, -r * 0.2, r * 0.15],
+      [r * 0.32, -r * 0.12, r * 0.17],
+      [r * 0.14, r * 0.2, r * 0.14],
     ];
-    for (const [sx, sy, sr] of spots) {
+    ctx.fillStyle = '#022C22';
+    for (let i = 0; i < spots.length; i++) {
+      const [sx, sy, sr] = spots[i];
       ctx.beginPath();
       ctx.arc(sx, sy, sr, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#FACC15';
+    }
+    ctx.fillStyle = '#FACC15';
+    for (let i = 0; i < spots.length; i++) {
+      const [sx, sy, sr] = spots[i];
       ctx.beginPath();
-      ctx.arc(sx, sy, sr * (0.45 + beatPulse * 0.25), 0, Math.PI * 2);
+      ctx.arc(sx, sy, sr * innerRScale, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#022C22';
     }
   } else if (levelIndex === 3) {
     // Level 3: Striped bumblebee/noir yellow-black hazard bands
     ctx.fillStyle = '#FACC15';
-    for (let s = -1; s <= 2; s++) {
-      ctx.fillRect(s * r * 0.38, -r, r * 0.16, r * 2);
+    for (let s = 0; s <= 2; s++) {
+      const bx = r * (-0.16 + s * 0.34);
+      const bh = halfH * (1 - s * 0.12);
+      ctx.fillRect(bx, -bh, r * 0.15, bh * 2);
     }
   } else if (levelIndex === 4) {
     // Level 4: Carbon-fiber diagonal armored segments + cyan stealth chevron
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.26)';
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.28)';
     ctx.lineWidth = 1.1;
-    for (let x = -r; x <= r; x += 6) {
-      ctx.beginPath();
-      ctx.moveTo(x, -r);
-      ctx.lineTo(x + r, r);
-      ctx.stroke();
+    ctx.beginPath();
+    for (let s = -2; s <= 2; s++) {
+      const x = s * r * 0.22;
+      ctx.moveTo(x - r * 0.12, -r * 0.34);
+      ctx.lineTo(x + r * 0.18, r * 0.34);
     }
+    ctx.stroke();
     ctx.strokeStyle = '#22D3EE';
     ctx.lineWidth = 2.2;
     ctx.beginPath();
-    ctx.moveTo(r * 0.2, -r * 0.38);
+    ctx.moveTo(r * 0.2, -r * 0.34);
     ctx.lineTo(-r * 0.08, 0);
-    ctx.lineTo(r * 0.2, r * 0.38);
+    ctx.lineTo(r * 0.2, r * 0.34);
     ctx.stroke();
   } else {
     // Level 5: Andean Aguayo crimson-sky-gold ceremonial carapace stripes
     ctx.fillStyle = '#DC2626';
-    ctx.fillRect(-r * 0.08, -r, r * 0.26, r * 2);
+    ctx.fillRect(-r * 0.08, -halfH, r * 0.24, halfH * 2);
     ctx.fillStyle = '#0EA5E9';
-    ctx.fillRect(r * 0.18, -r, r * 0.14, r * 2);
+    ctx.fillRect(r * 0.16, -halfH * 0.92, r * 0.14, halfH * 1.84);
     ctx.strokeStyle = '#FACC15';
     ctx.lineWidth = 1.8;
     ctx.beginPath();
-    ctx.moveTo(r * 0.1, -r * 0.34);
-    ctx.lineTo(r * 0.4, 0);
-    ctx.lineTo(r * 0.1, r * 0.34);
-    ctx.lineTo(-r * 0.2, 0);
+    ctx.moveTo(r * 0.1, -r * 0.32);
+    ctx.lineTo(r * 0.38, 0);
+    ctx.lineTo(r * 0.1, r * 0.32);
+    ctx.lineTo(-r * 0.18, 0);
     ctx.closePath();
     ctx.stroke();
   }
 }
+
+const ENEMY_LEVEL_BASES: Record<
+  LevelNumber,
+  { body: string; gold: string; royal: string; eye: string; leg: string }
+> = {
+  1: { body: '#1E293B', gold: '#F59E0B', royal: '#E11D48', eye: '#4ADE80', leg: '#334155' },
+  2: { body: '#0F766E', gold: '#FACC15', royal: '#FB7185', eye: '#FEF08A', leg: '#115E59' },
+  3: { body: '#1E1B4B', gold: '#FACC15', royal: '#E11D48', eye: '#E879F9', leg: '#312E81' },
+  4: { body: '#27272A', gold: '#FDE047', royal: '#F43F5E', eye: '#22D3EE', leg: '#3F3F46' },
+  5: { body: '#442416', gold: '#FACC15', royal: '#DC2626', eye: '#F43F5E', leg: '#78350F' },
+};
 
 function drawArthropodEnemy(
   ctx: CanvasRenderingContext2D,
@@ -3998,16 +4045,7 @@ function drawArthropodEnemy(
   const archCfg = config.enemies[enemy.archetype];
   const isFlash = enemy.hitFlashTimer > 0;
   const accent = isFlash ? '#FFFFFF' : archCfg.accentColor;
-
-  // Level 1 uses EXACT Title-Screen palette: Dark Metallic Gunmetal-Slate + Glowing Neon-Green Compound Eyes!
-  const levelBases: Record<LevelNumber, { body: string; gold: string; royal: string; eye: string; leg: string }> = {
-    1: { body: '#1E293B', gold: '#F59E0B', royal: '#E11D48', eye: '#4ADE80', leg: '#334155' },
-    2: { body: '#0F766E', gold: '#FACC15', royal: '#FB7185', eye: '#FEF08A', leg: '#115E59' },
-    3: { body: '#1E1B4B', gold: '#FACC15', royal: '#E11D48', eye: '#E879F9', leg: '#312E81' },
-    4: { body: '#27272A', gold: '#FDE047', royal: '#F43F5E', eye: '#22D3EE', leg: '#3F3F46' },
-    5: { body: '#442416', gold: '#FACC15', royal: '#DC2626', eye: '#F43F5E', leg: '#78350F' },
-  };
-  const mat = levelBases[levelIndex] ?? levelBases[1];
+  const mat = ENEMY_LEVEL_BASES[levelIndex] ?? ENEMY_LEVEL_BASES[1];
 
   const chitin = isFlash
     ? '#FFFFFF'
@@ -4183,11 +4221,7 @@ function drawArthropodEnemy(
   ctx.fill();
 
   if (!isFlash) {
-    ctx.save();
-    traceBodyPath();
-    ctx.clip();
     drawLevelCarapaceTexture(ctx, levelIndex, r, beatPulse, enemy.archetype);
-    ctx.restore();
   }
 
   ctx.strokeStyle = levelIndex === 5 && !isFlash ? '#FACC15' : INK;
@@ -4468,13 +4502,21 @@ function drawDimensionalPortal(ctx: CanvasRenderingContext2D, state: RenderState
   ctx.strokeStyle = isQueen ? 'rgba(244, 63, 94, 0.65)' : 'rgba(56, 189, 248, 0.65)';
   ctx.lineWidth = 5;
   ctx.beginPath();
-  ctx.ellipse(0, 0, rx + 12 + Math.sin(state.time * 12) * 3, ry + 14 + Math.sin(state.time * 12) * 3, 0, 0, Math.PI * 2);
+  ctx.ellipse(
+    0,
+    0,
+    Math.max(1, rx + 12 + Math.sin(state.time * 12) * 3),
+    Math.max(1, ry + 14 + Math.sin(state.time * 12) * 3),
+    0,
+    0,
+    Math.PI * 2
+  );
   ctx.stroke();
 
   // Clipped portal window revealing the connected destination texture!
   ctx.save();
   ctx.beginPath();
-  ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, Math.max(0.5, rx), Math.max(0.5, ry), 0, 0, Math.PI * 2);
   ctx.clip();
 
   if (isQueen) {
@@ -4486,7 +4528,15 @@ function drawDimensionalPortal(ctx: CanvasRenderingContext2D, state: RenderState
       ctx.strokeStyle = ring % 2 === 0 ? '#E11D48' : '#FACC15';
       ctx.lineWidth = 3.5;
       ctx.beginPath();
-      ctx.ellipse(0, 0, rx * (0.3 + ring * 0.16), ry * (0.3 + ring * 0.16), ring * 0.4, 0, Math.PI * 1.6);
+      ctx.ellipse(
+        0,
+        0,
+        Math.max(0.5, rx * (0.3 + ring * 0.16)),
+        Math.max(0.5, ry * (0.3 + ring * 0.16)),
+        ring * 0.4,
+        0,
+        Math.PI * 1.6
+      );
       ctx.stroke();
     }
     // Queen Mothership silhouette eyes peeking from deep inside the portal!
@@ -4516,7 +4566,7 @@ function drawDimensionalPortal(ctx: CanvasRenderingContext2D, state: RenderState
   ctx.lineWidth = 2.6;
   for (let arc = 0; arc < 3; arc++) {
     ctx.beginPath();
-    ctx.arc(0, 0, radius * (0.28 + arc * 0.22), arc * 1.1, arc * 1.1 + Math.PI * 1.25);
+    ctx.arc(0, 0, Math.max(0.5, radius * (0.28 + arc * 0.22)), arc * 1.1, arc * 1.1 + Math.PI * 1.25);
     ctx.stroke();
   }
   ctx.restore();
@@ -4525,13 +4575,23 @@ function drawDimensionalPortal(ctx: CanvasRenderingContext2D, state: RenderState
   ctx.strokeStyle = isQueen ? '#F43F5E' : '#38BDF8';
   ctx.lineWidth = 4.5;
   ctx.beginPath();
-  ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, Math.max(0.5, rx), Math.max(0.5, ry), 0, 0, Math.PI * 2);
   ctx.stroke();
-  ctx.strokeStyle = '#FEF08A';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, rx - 3, ry - 3, 0, -state.time * 3, -state.time * 3 + Math.PI * 1.4);
-  ctx.stroke();
+  if (rx > 3.5 && ry > 3.5) {
+    ctx.strokeStyle = '#FEF08A';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(
+      0,
+      0,
+      Math.max(0.5, rx - 3),
+      Math.max(0.5, ry - 3),
+      0,
+      -state.time * 3,
+      -state.time * 3 + Math.PI * 1.4
+    );
+    ctx.stroke();
+  }
 
   // Destination label above portal
   ctx.font = '900 12px Outfit, sans-serif';
@@ -4996,7 +5056,22 @@ function drawBoss(ctx: CanvasRenderingContext2D, state: RenderState) {
 
 export function renderGameFrame(ctx: CanvasRenderingContext2D, state: RenderState) {
   ctx.save();
-  ctx.translate(state.shakeX, state.shakeY);
+  const shakeAngle = state.shakeAngleRad ?? 0;
+  const overscan = state.shakeOverscanScale ?? 1;
+  if (overscan > 1.0005 || Math.abs(shakeAngle) > 0.0002) {
+    const cx = state.width * 0.5;
+    const cy = state.height * 0.5;
+    ctx.translate(cx + state.shakeX, cy + state.shakeY);
+    if (Math.abs(shakeAngle) > 0.0002) {
+      ctx.rotate(shakeAngle);
+    }
+    if (overscan > 1.0005) {
+      ctx.scale(overscan, overscan);
+    }
+    ctx.translate(-cx, -cy);
+  } else if (state.shakeX !== 0 || state.shakeY !== 0) {
+    ctx.translate(state.shakeX, state.shakeY);
+  }
 
   drawEarthLevelBackdrop(ctx, state);
 
@@ -5148,8 +5223,27 @@ export function renderGameFrame(ctx: CanvasRenderingContext2D, state: RenderStat
   }
 
   // Player & Frog Ballistic Projectiles (rotated cleanly along their velocity vector!)
+  const viewMinX = -48;
+  const viewMaxX = state.width + 48;
+  const viewMinY = -48;
+  const viewMaxY = state.height + 48;
   for (const b of state.playerBullets) {
     if (!b.active) continue;
+    if (b.x < viewMinX || b.x > viewMaxX || b.y < viewMinY || b.y > viewMaxY) continue;
+    if (b.kind === 'frog_bubble') {
+      ctx.fillStyle = 'rgba(134, 239, 172, 0.85)';
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.arc(b.x - 2, b.y - 2, b.radius * 0.36, 0, Math.PI * 2);
+      ctx.fill();
+      continue;
+    }
     ctx.save();
     ctx.translate(b.x, b.y);
     const angle = Math.atan2(b.vy, b.vx);
@@ -5391,18 +5485,6 @@ export function renderGameFrame(ctx: CanvasRenderingContext2D, state: RenderStat
       ctx.beginPath();
       ctx.arc(1.8, -1.8, 2, 0, Math.PI * 2);
       ctx.fill();
-    } else if (b.kind === 'frog_bubble') {
-      ctx.fillStyle = 'rgba(134, 239, 172, 0.85)';
-      ctx.strokeStyle = INK;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(0, 0, b.radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.fillStyle = '#FFFFFF';
-      ctx.beginPath();
-      ctx.arc(-2, -2, b.radius * 0.36, 0, Math.PI * 2);
-      ctx.fill();
     } else if (b.kind === 'trumpet') {
       // Sarracenia accelerating rocket dart
       ctx.rotate(angle);
@@ -5586,132 +5668,125 @@ export function renderGameFrame(ctx: CanvasRenderingContext2D, state: RenderStat
   let ebIdx = 0;
   for (const eb of state.enemyBullets) {
     if (!eb.active) continue;
+    if (eb.x < viewMinX || eb.x > viewMaxX || eb.y < viewMinY || eb.y > viewMaxY) continue;
     ebIdx++;
     const lutIdx = Math.floor(((state.time * 82 + eb.age * 96 + ebIdx * 5) % BULLET_LUT_SIZE + BULLET_LUT_SIZE) % BULLET_LUT_SIZE);
     const multiFill = ENEMY_BULLET_FILL_LUT[lutIdx];
     const multiCore = ENEMY_BULLET_CORE_LUT[lutIdx];
 
-    ctx.save();
-    ctx.translate(eb.x, eb.y);
     if (eb.kind === 'stinger') {
+      ctx.save();
+      ctx.translate(eb.x, eb.y);
       ctx.rotate(state.time * 5.2 + eb.age * 2.5);
-      const traceStar = () => {
-        ctx.beginPath();
-        for (let s = 0; s < 4; s++) {
-          const ang = (s / 4) * Math.PI * 2;
-          ctx.lineTo(Math.cos(ang) * (eb.radius + 3.5), Math.sin(ang) * (eb.radius + 3.5));
-          ctx.lineTo(Math.cos(ang + Math.PI / 4) * (eb.radius * 0.48), Math.sin(ang + Math.PI / 4) * (eb.radius * 0.48));
-        }
-        ctx.closePath();
-      };
-      // High-contrast outer white halo + jet-black border
+      const outerR = eb.radius + 3.5;
+      const innerR = eb.radius * 0.48;
+      ctx.beginPath();
+      for (let s = 0; s < 4; s++) {
+        const ang = (s / 4) * Math.PI * 2;
+        const ox = Math.cos(ang) * outerR;
+        const oy = Math.sin(ang) * outerR;
+        if (s === 0) ctx.moveTo(ox, oy);
+        else ctx.lineTo(ox, oy);
+        ctx.lineTo(Math.cos(ang + Math.PI / 4) * innerR, Math.sin(ang + Math.PI / 4) * innerR);
+      }
+      ctx.closePath();
       ctx.strokeStyle = '#FFFFFF';
       ctx.lineWidth = 5.4;
-      traceStar();
       ctx.stroke();
       ctx.fillStyle = multiFill;
       ctx.strokeStyle = '#05070D';
       ctx.lineWidth = 2.6;
-      traceStar();
       ctx.fill();
       ctx.stroke();
+      ctx.restore();
     } else if (eb.kind === 'boomerang') {
+      ctx.save();
+      ctx.translate(eb.x, eb.y);
       ctx.rotate(state.time * 14 + eb.age * 6);
-      const traceBoom = () => {
-        ctx.beginPath();
-        ctx.arc(0, 0, eb.radius + 3.5, -Math.PI * 0.75, Math.PI * 0.75);
-        ctx.arc(-3, 0, eb.radius * 0.55, Math.PI * 0.75, -Math.PI * 0.75, true);
-        ctx.closePath();
-      };
+      ctx.beginPath();
+      ctx.arc(0, 0, eb.radius + 3.5, -Math.PI * 0.75, Math.PI * 0.75);
+      ctx.arc(-3, 0, eb.radius * 0.55, Math.PI * 0.75, -Math.PI * 0.75, true);
+      ctx.closePath();
       ctx.strokeStyle = '#FFFFFF';
       ctx.lineWidth = 5.6;
-      traceBoom();
       ctx.stroke();
       ctx.fillStyle = multiFill;
       ctx.strokeStyle = '#05070D';
       ctx.lineWidth = 2.6;
-      traceBoom();
       ctx.fill();
       ctx.stroke();
+      ctx.restore();
+    } else if (eb.kind === 'sniper') {
+      ctx.save();
+      ctx.translate(eb.x, eb.y);
+      ctx.rotate(Math.atan2(eb.vy, eb.vx));
+      ctx.beginPath();
+      ctx.moveTo(13, 0);
+      ctx.lineTo(-8, 5);
+      ctx.lineTo(-8, -5);
+      ctx.closePath();
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 5.2;
+      ctx.stroke();
+      ctx.fillStyle = multiFill;
+      ctx.strokeStyle = '#05070D';
+      ctx.lineWidth = 2.5;
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
     } else if (eb.kind === 'gravity_orb') {
       ctx.strokeStyle = multiCore;
       ctx.lineWidth = 2.4;
       ctx.beginPath();
-      ctx.arc(0, 0, eb.radius + 8 + Math.sin(state.time * 14) * 3, 0, Math.PI * 2);
+      ctx.arc(eb.x, eb.y, eb.radius + 8 + Math.sin(state.time * 14) * 3, 0, Math.PI * 2);
       ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(eb.x, eb.y, eb.radius, 0, Math.PI * 2);
       ctx.strokeStyle = '#FFFFFF';
       ctx.lineWidth = 5.8;
-      ctx.beginPath();
-      ctx.arc(0, 0, eb.radius, 0, Math.PI * 2);
       ctx.stroke();
       ctx.fillStyle = multiFill;
       ctx.strokeStyle = '#05070D';
       ctx.lineWidth = 2.8;
-      ctx.beginPath();
-      ctx.arc(0, 0, eb.radius, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
       ctx.fillStyle = '#05070D';
       ctx.beginPath();
-      ctx.arc(0, 0, eb.radius * 0.42, 0, Math.PI * 2);
+      ctx.arc(eb.x, eb.y, eb.radius * 0.42, 0, Math.PI * 2);
       ctx.fill();
     } else if (eb.kind === 'bounce_orb') {
+      ctx.beginPath();
+      ctx.arc(eb.x, eb.y, eb.radius, 0, Math.PI * 2);
       ctx.strokeStyle = '#FFFFFF';
       ctx.lineWidth = 5.4;
-      ctx.beginPath();
-      ctx.arc(0, 0, eb.radius, 0, Math.PI * 2);
       ctx.stroke();
       ctx.fillStyle = multiFill;
       ctx.strokeStyle = '#05070D';
       ctx.lineWidth = 2.6;
-      ctx.beginPath();
-      ctx.arc(0, 0, eb.radius, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
       ctx.strokeStyle = multiCore;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(0, 0, eb.radius * 0.55, 0, Math.PI * 2);
-      ctx.stroke();
-    } else if (eb.kind === 'sniper') {
-      ctx.rotate(Math.atan2(eb.vy, eb.vx));
-      const traceDart = () => {
-        ctx.beginPath();
-        ctx.moveTo(13, 0);
-        ctx.lineTo(-8, 5);
-        ctx.lineTo(-8, -5);
-        ctx.closePath();
-      };
-      ctx.strokeStyle = '#FFFFFF';
-      ctx.lineWidth = 5.2;
-      traceDart();
-      ctx.stroke();
-      ctx.fillStyle = multiFill;
-      ctx.strokeStyle = '#05070D';
-      ctx.lineWidth = 2.5;
-      traceDart();
-      ctx.fill();
+      ctx.arc(eb.x, eb.y, eb.radius * 0.55, 0, Math.PI * 2);
       ctx.stroke();
     } else {
-      // Standard spore orb: high-contrast white halo + jet-black border + rapid multicolor body
+      // Standard spore orb: single arc path reused for halo + fill + border (zero save/restore!)
+      ctx.beginPath();
+      ctx.arc(eb.x, eb.y, eb.radius + 0.6, 0, Math.PI * 2);
       ctx.strokeStyle = '#FFFFFF';
       ctx.lineWidth = 5.0;
-      ctx.beginPath();
-      ctx.arc(0, 0, eb.radius + 0.6, 0, Math.PI * 2);
       ctx.stroke();
       ctx.fillStyle = multiFill;
       ctx.strokeStyle = '#05070D';
       ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.arc(0, 0, eb.radius + 0.6, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
       ctx.fillStyle = '#FFFFFF';
       ctx.beginPath();
-      ctx.arc(-1.6, -1.6, eb.radius * 0.36, 0, Math.PI * 2);
+      ctx.arc(eb.x - 1.6, eb.y - 1.6, eb.radius * 0.36, 0, Math.PI * 2);
       ctx.fill();
     }
-    ctx.restore();
   }
 
   // Dimensional Portal (Boss Clear -> Next Level / Reina Nodriza Teaser, or Level Entry)
@@ -5725,19 +5800,104 @@ export function renderGameFrame(ctx: CanvasRenderingContext2D, state: RenderStat
   drawPetCompanion(ctx, state);
   drawHeroBiplane(ctx, state);
 
-  // Pooled Particles (flat state, zero ctx.save/restore overhead per particle!)
-  ctx.strokeStyle = INK;
-  ctx.lineWidth = 1.4;
+  // Multi-Layered Pooled Combat Particles (culled off-screen, shared lineCap, trig-free sparks)
+  ctx.lineCap = 'round';
   for (const pt of state.particles) {
     if (!pt.active) continue;
-    const alpha = Math.max(0, pt.life / pt.maxLife);
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = pt.color;
-    ctx.beginPath();
-    ctx.arc(pt.x, pt.y, pt.size * (0.4 + alpha * 0.6), 0, Math.PI * 2);
-    ctx.fill();
-    if (pt.outlined) {
+    if (pt.x < viewMinX || pt.x > viewMaxX || pt.y < viewMinY || pt.y > viewMaxY) continue;
+    const lifeRatio = Math.max(0, Math.min(1, pt.life / Math.max(0.01, pt.maxLife)));
+    const progress = 1 - lifeRatio;
+    const curSize = Math.max(0.5, pt.size + (pt.endSize - pt.size) * progress);
+
+    if (pt.kind === 'smoke') {
+      ctx.globalAlpha = lifeRatio * 0.52;
+      ctx.fillStyle = pt.color;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, curSize, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (pt.kind === 'ring') {
+      ctx.globalAlpha = lifeRatio * 0.92;
+      ctx.strokeStyle = pt.color;
+      ctx.lineWidth = Math.max(0.8, pt.lineWidth * (0.35 + lifeRatio * 0.65));
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, curSize, 0, Math.PI * 2);
       ctx.stroke();
+    } else if (pt.kind === 'shard') {
+      ctx.save();
+      ctx.translate(pt.x, pt.y);
+      ctx.rotate(pt.rotation);
+      ctx.globalAlpha = Math.min(1, lifeRatio * 1.25);
+      ctx.fillStyle = pt.color;
+      ctx.beginPath();
+      ctx.moveTo(curSize, 0);
+      ctx.lineTo(-curSize * 0.6, curSize * 0.68);
+      ctx.lineTo(-curSize * 0.85, -curSize * 0.25);
+      ctx.lineTo(0, -curSize * 0.72);
+      ctx.closePath();
+      ctx.fill();
+      if (pt.outlined) {
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+      }
+      ctx.restore();
+    } else if (pt.kind === 'spark') {
+      const spd = Math.hypot(pt.vx, pt.vy);
+      const tailLen = Math.max(2.5, curSize * (0.65 + Math.min(1.4, spd / 240)));
+      let x2: number;
+      let y2: number;
+      if (spd > 1) {
+        const inv = tailLen / spd;
+        x2 = pt.x - pt.vx * inv;
+        y2 = pt.y - pt.vy * inv;
+      } else {
+        x2 = pt.x - Math.cos(pt.rotation) * tailLen;
+        y2 = pt.y - Math.sin(pt.rotation) * tailLen;
+      }
+      ctx.globalAlpha = Math.min(1, lifeRatio * 1.2);
+      ctx.strokeStyle = pt.color;
+      ctx.lineWidth = Math.max(1, pt.lineWidth * (0.4 + lifeRatio * 0.6));
+      ctx.beginPath();
+      ctx.moveTo(pt.x, pt.y);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, Math.max(0.9, pt.lineWidth * 0.52), 0, Math.PI * 2);
+      ctx.fill();
+    } else if (pt.kind === 'flash') {
+      ctx.save();
+      ctx.translate(pt.x, pt.y);
+      ctx.rotate(pt.rotation);
+      ctx.globalAlpha = Math.min(1, lifeRatio * 1.15);
+      const rays = 6;
+      ctx.fillStyle = pt.secondaryColor;
+      ctx.beginPath();
+      for (let r = 0; r < rays * 2; r++) {
+        const a = (r / (rays * 2)) * Math.PI * 2;
+        const rad = r % 2 === 0 ? curSize * 1.15 : curSize * 0.38;
+        if (r === 0) ctx.moveTo(Math.cos(a) * rad, Math.sin(a) * rad);
+        else ctx.lineTo(Math.cos(a) * rad, Math.sin(a) * rad);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = pt.color;
+      ctx.beginPath();
+      ctx.arc(0, 0, Math.max(1, curSize * 0.42), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    } else {
+      // droplet (default)
+      ctx.globalAlpha = lifeRatio;
+      ctx.fillStyle = pt.color;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, curSize, 0, Math.PI * 2);
+      ctx.fill();
+      if (pt.outlined) {
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+      }
     }
   }
   ctx.globalAlpha = 1;
@@ -5758,4 +5918,14 @@ export function renderGameFrame(ctx: CanvasRenderingContext2D, state: RenderStat
   }
 
   ctx.restore();
+
+  // Screen-space crimson damage vignette pulse when player takes damage (cached radial gradient)
+  const dmgFlash = state.damageFlashAlpha ?? 0;
+  if (dmgFlash > 0.01) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(1, dmgFlash));
+    ctx.fillStyle = getDamageVignetteGradient(ctx, state.width, state.height);
+    ctx.fillRect(0, 0, state.width, state.height);
+    ctx.restore();
+  }
 }

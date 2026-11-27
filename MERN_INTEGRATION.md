@@ -9,7 +9,7 @@ Dionaea Strike ya está auditado y empaquetado para integrarse sin fricción en 
 ### 1. Copiar archivos al frontend React (`client/`)
 Copia estas carpetas en tu proyecto React:
 - `src/components/`, `src/game/`, `src/assets/images/`, `src/dionaea-embed.ts`, `src/index.css` → `client/src/games/dionaea-strike/`
-- `public/assets/aistudio/` (las pistas `.m4a` de música) → `client/public/assets/aistudio/`
+- `public/assets/audio/` y `public/assets/video/` (música `.m4a` y video intro `.webm`) → `client/public/assets/`
 
 Dependencias mínimas requeridas en `client/package.json`:
 ```bash
@@ -130,7 +130,7 @@ export default router;
 
 ## Opción 2: Servir el build compilado (`dist/`) directamente desde Express
 
-1. Ejecuta `npm run build` en este proyecto. Todas las imágenes y scripts quedan empaquetados en `dist/` junto con las pistas de audio en `dist/assets/aistudio/`.
+1. Ejecuta `npm run build` en este proyecto. Todas las imágenes y scripts quedan empaquetados en `dist/` junto con las pistas de audio en `dist/assets/audio/` y el video en `dist/assets/video/`.
 2. Copia la carpeta `dist/` a tu backend Express (por ejemplo `server/public/dionaea/`) y móntala así:
 
 ```js
