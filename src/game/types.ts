@@ -129,10 +129,26 @@ export interface GameConfig {
   bosses: [BossConfig, BossConfig, BossConfig, BossConfig, BossConfig];
 }
 
+export type PortalDestination = LandscapeId | 'queen_mothership';
+
+export interface PortalSequenceState {
+  phase: 'forming' | 'entering' | 'exiting';
+  x: number;
+  y: number;
+  radius: number;
+  maxRadius: number;
+  progress: number;
+  duration: number;
+  textureTarget: PortalDestination;
+  label: string;
+}
+
 export interface FusedLoadout {
   levels: SpeciesLevels;
   activeSpecies: SpeciesId[];
   secretEvolution: SpeciesId | null;
+  isSuperSaiyanFusion: boolean;
+  fusedPair: [SpeciesId, SpeciesId] | null;
   fireInterval: number;
   dionaeaLevel: SpeciesLevel;
   dionaeaDamage: number;
@@ -196,7 +212,10 @@ export type PlayerProjectileKind =
   | 'cluster_bomb'
   | 'pistol_shot'
   | 'meow_wave'
-  | 'mate_shot';
+  | 'mate_shot'
+  | 'palito_heart'
+  | 'apex_fusion_auto'
+  | 'apex_fusion_manual';
 
 export interface ProjectileDescriptor {
   kind: PlayerProjectileKind;
@@ -299,6 +318,11 @@ export interface HudSnapshot {
   activeSlotsCount: number;
   maxSlots: number;
   secretEvolution: SpeciesId | null;
+  isSuperSaiyanFusion: boolean;
+  apexFusionName: string | null;
+  apexFusionAutoName: string | null;
+  apexFusionManualName: string | null;
+  portalActive: boolean;
   unlockedSpecies: SpeciesId[];
   petId: PetId;
   unlockedPets: PetId[];

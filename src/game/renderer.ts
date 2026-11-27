@@ -6,10 +6,22 @@ import type {
   LevelNumber,
   PetId,
   PlayerProjectileKind,
+  PortalSequenceState,
   SpeciesId,
   SpeciesLevels,
 } from './types';
 import type { FrogCompanionState, SimEnemyState } from './fusionRules';
+
+// Precomputed 36-bucket HSL palette LUTs to avoid per-bullet per-frame string allocations in hot loops
+const BULLET_LUT_SIZE = 36;
+const ENEMY_BULLET_FILL_LUT: string[] = Array.from({ length: BULLET_LUT_SIZE }, (_, i) => {
+  const hue = Math.round((i / BULLET_LUT_SIZE) * 360);
+  return `hsl(${hue}, 100%, 56%)`;
+});
+const ENEMY_BULLET_CORE_LUT: string[] = Array.from({ length: BULLET_LUT_SIZE }, (_, i) => {
+  const altHue = Math.round(((i / BULLET_LUT_SIZE) * 360 + 145) % 360);
+  return `hsl(${altHue}, 100%, 72%)`;
+});
 
 export interface PlayerBullet {
   active: boolean;
@@ -232,6 +244,8 @@ export interface RenderState {
   heroRecoil: number; // 0..1 recoil kickback
   invasionIntensity: number; // 0..1 approaching invasion escalation
   invasionAlertLabel: string | null;
+  superSaiyanActive: boolean;
+  portal: PortalSequenceState | null;
   frog: FrogCompanionState;
   mafiaCats: MafiaCatUnit[];
   poisonFrogs: PoisonFrogUnit[];
@@ -1258,22 +1272,59 @@ function drawHeroBiplane(ctx: CanvasRenderingContext2D, state: RenderState) {
     ctx.setLineDash([]);
     ctx.restore();
   }
-  if (secretLv5Id && !flash) {
-    const spCol = config.species[secretLv5Id].accentColor;
+  if ((secretLv5Id || state.superSaiyanActive) && !flash) {
+    const spCol = config.species[secretLv5Id ?? primarySpecies]?.accentColor ?? '#FACC15';
     ctx.save();
-    ctx.strokeStyle = 'rgba(250, 204, 21, 0.92)';
-    ctx.lineWidth = 3.2;
+    ctx.strokeStyle = 'rgba(250, 204, 21, 0.94)';
+    ctx.lineWidth = state.superSaiyanActive ? 4.2 : 3.2;
     ctx.beginPath();
     ctx.ellipse(6, -1, 58, 36, 0, 0, Math.PI * 2);
     ctx.stroke();
     ctx.strokeStyle = spCol;
-    ctx.globalAlpha = 0.78;
-    ctx.lineWidth = 2.4;
+    ctx.globalAlpha = 0.82;
+    ctx.lineWidth = 2.6;
     ctx.setLineDash([10, 6]);
     ctx.beginPath();
     ctx.ellipse(6, -1, 65, 42, 0, -time * 3.8, -time * 3.8 + Math.PI * 2);
     ctx.stroke();
     ctx.setLineDash([]);
+
+    if (state.superSaiyanActive) {
+      // Super Saiyan golden spiky flame aura + crackling ki lightning!
+      ctx.globalAlpha = 0.88;
+      ctx.fillStyle = 'rgba(250, 204, 21, 0.28)';
+      ctx.strokeStyle = '#FEF08A';
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      const spikes = 16;
+      for (let s = 0; s <= spikes; s++) {
+        const ang = (s / spikes) * Math.PI * 2 + time * 3.5;
+        const flare = s % 2 === 0 ? 16 + Math.sin(time * 28 + s) * 6 : 2;
+        const px = Math.cos(ang) * (54 + flare);
+        const py = Math.sin(ang) * (32 + flare * 0.65);
+        if (s === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Golden spiky Super Saiyan crest atop fuselage
+      ctx.fillStyle = '#FACC15';
+      ctx.strokeStyle = '#FEF9C3';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(-12, -26);
+      ctx.lineTo(-4, -44);
+      ctx.lineTo(3, -30);
+      ctx.lineTo(12, -46);
+      ctx.lineTo(14, -30);
+      ctx.lineTo(24, -40);
+      ctx.lineTo(18, -24);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -2519,8 +2570,45 @@ function drawInfernalesRiders(ctx: CanvasRenderingContext2D, state: RenderState)
 }
 
 function drawPetCompanion(ctx: CanvasRenderingContext2D, state: RenderState) {
-  const { frog, time, petId, royScreamTimer, royScreamRadius } = state;
+  const { frog, time, petId, royScreamTimer, royScreamRadius, superSaiyanActive } = state;
   if (!frog.enabled) return;
+
+  if (superSaiyanActive) {
+    // Super Saiyan golden flame aura & spiky golden ki halo around active pet!
+    ctx.save();
+    ctx.translate(frog.x, frog.y);
+    ctx.fillStyle = 'rgba(250, 204, 21, 0.34)';
+    ctx.strokeStyle = '#FEF08A';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    const spikes = 12;
+    for (let s = 0; s <= spikes; s++) {
+      const ang = (s / spikes) * Math.PI * 2 - time * 4.5;
+      const rad = (s % 2 === 0 ? 34 : 21) + Math.sin(time * 26 + s) * 3.5;
+      const px = Math.cos(ang) * rad;
+      const py = Math.sin(ang) * rad;
+      if (s === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Small golden Super Saiyan spiky crest above pet
+    ctx.fillStyle = '#FACC15';
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(-7, -15);
+    ctx.lineTo(-3, -27);
+    ctx.lineTo(2, -18);
+    ctx.lineTo(7, -28);
+    ctx.lineTo(9, -15);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
 
   if (petId === 'sicario') {
     // Sicario uses PISTOL & GUNSHOTS (no tongue/claw slashes!)
@@ -2737,21 +2825,26 @@ function drawPetCompanion(ctx: CanvasRenderingContext2D, state: RenderState) {
     const faconSlash = frog.faconSlashTimer ?? 0;
     const ponchoBlock = frog.ponchoBlockTimer ?? 0;
 
-    // Sweeping silver facón slash arc when striking nearby enemy!
+    // Sweeping extended silver facón slash arc (matches expanded melee reach!)
     if (faconSlash > 0) {
       const prog = Math.sin((faconSlash / 0.3) * Math.PI);
       ctx.save();
-      ctx.translate(frog.x + 14, frog.y);
+      ctx.translate(frog.x + 24, frog.y);
       ctx.strokeStyle = '#F8FAFC';
-      ctx.lineWidth = 6.5 * prog + 1.5;
+      ctx.lineWidth = 8.5 * prog + 2;
       ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.arc(0, 0, 44, -Math.PI * 0.45, Math.PI * 0.45);
+      ctx.arc(0, 0, 108, -Math.PI * 0.44, Math.PI * 0.44);
       ctx.stroke();
       ctx.strokeStyle = '#38BDF8';
-      ctx.lineWidth = 2.8;
+      ctx.lineWidth = 4;
       ctx.beginPath();
-      ctx.arc(4, 0, 50, -Math.PI * 0.38, Math.PI * 0.38);
+      ctx.arc(8, 0, 122, -Math.PI * 0.38, Math.PI * 0.38);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(254, 240, 138, 0.72)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(14, 0, 136, -Math.PI * 0.28, Math.PI * 0.28);
       ctx.stroke();
       ctx.restore();
     }
@@ -4303,6 +4396,28 @@ function drawArthropodEnemy(
     ctx.setLineDash([]);
   }
 
+  // Palito slow-charm buildup hearts (progresses toward full enamored circle!)
+  const charmBuildup = enemy.charmBuildup ?? 0;
+  if (!enemy.dying && charmBuildup > 0 && (enemy.charmedTimer ?? 0) <= 0) {
+    for (let h = 0; h < charmBuildup; h++) {
+      const hx = (h - (charmBuildup - 1) * 0.5) * 11;
+      const hy = -r - 12 - Math.abs(Math.sin(time * 7 + h)) * 3;
+      ctx.save();
+      ctx.translate(hx, hy);
+      ctx.fillStyle = '#F472B6';
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.moveTo(0, 3);
+      ctx.bezierCurveTo(-4.5, -1, -4, -5.5, 0, -2.2);
+      ctx.bezierCurveTo(4, -5.5, 4.5, -1, 0, 3);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   // Palito enamored floating hearts above charmed enemy!
   if (!enemy.dying && (enemy.charmedTimer ?? 0) > 0) {
     for (let h = 0; h < 2; h++) {
@@ -4333,6 +4448,99 @@ function drawArthropodEnemy(
     ctx.fillStyle = accent;
     ctx.fillRect(-bw / 2, -r - 13, bw * ratio, 4.5);
   }
+
+  ctx.restore();
+}
+
+function drawDimensionalPortal(ctx: CanvasRenderingContext2D, state: RenderState) {
+  const portal = state.portal;
+  if (!portal || portal.radius <= 1) return;
+
+  const { x, y, radius, textureTarget, label } = portal;
+  const rx = radius * 0.72;
+  const ry = radius;
+  const isQueen = textureTarget === 'queen_mothership';
+
+  ctx.save();
+  ctx.translate(x, y);
+
+  // Outer energy shockwave ring
+  ctx.strokeStyle = isQueen ? 'rgba(244, 63, 94, 0.65)' : 'rgba(56, 189, 248, 0.65)';
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rx + 12 + Math.sin(state.time * 12) * 3, ry + 14 + Math.sin(state.time * 12) * 3, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Clipped portal window revealing the connected destination texture!
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+  ctx.clip();
+
+  if (isQueen) {
+    // Organic Xenomorph Queen Mothership Hive Texture inside final portal
+    ctx.fillStyle = '#180510';
+    ctx.fillRect(-rx, -ry, rx * 2, ry * 2);
+    ctx.rotate(state.time * 0.7);
+    for (let ring = 0; ring < 5; ring++) {
+      ctx.strokeStyle = ring % 2 === 0 ? '#E11D48' : '#FACC15';
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, rx * (0.3 + ring * 0.16), ry * (0.3 + ring * 0.16), ring * 0.4, 0, Math.PI * 1.6);
+      ctx.stroke();
+    }
+    // Queen Mothership silhouette eyes peeking from deep inside the portal!
+    ctx.fillStyle = '#F43F5E';
+    ctx.beginPath();
+    ctx.arc(-14, -6, 6, 0, Math.PI * 2);
+    ctx.arc(14, -6, 6, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    const seamBg = getSeamlessStageBackground(textureTarget);
+    if (seamBg && seamBg.width > 0) {
+      const drawH = ry * 2.2;
+      const aspect = seamBg.width / Math.max(1, seamBg.height);
+      const drawW = drawH * aspect;
+      const pan = (state.time * 75) % Math.max(1, drawW);
+      ctx.drawImage(seamBg.source, -rx - pan, -ry - 6, drawW, drawH);
+      ctx.drawImage(seamBg.source, -rx - pan + drawW, -ry - 6, drawW, drawH);
+    } else {
+      ctx.fillStyle = '#0C4A6E';
+      ctx.fillRect(-rx, -ry, rx * 2, ry * 2);
+    }
+  }
+
+  // Swirling portal distortion spiral overlay
+  ctx.rotate(state.time * 2.6);
+  ctx.strokeStyle = isQueen ? 'rgba(250, 204, 21, 0.48)' : 'rgba(224, 242, 254, 0.5)';
+  ctx.lineWidth = 2.6;
+  for (let arc = 0; arc < 3; arc++) {
+    ctx.beginPath();
+    ctx.arc(0, 0, radius * (0.28 + arc * 0.22), arc * 1.1, arc * 1.1 + Math.PI * 1.25);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Solid anime cel-shaded portal rim
+  ctx.strokeStyle = isQueen ? '#F43F5E' : '#38BDF8';
+  ctx.lineWidth = 4.5;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = '#FEF08A';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rx - 3, ry - 3, 0, -state.time * 3, -state.time * 3 + Math.PI * 1.4);
+  ctx.stroke();
+
+  // Destination label above portal
+  ctx.font = '900 12px Outfit, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 3.5;
+  ctx.strokeText(label, 0, -ry - 14);
+  ctx.fillStyle = isQueen ? '#FDA4AF' : '#FEF08A';
+  ctx.fillText(label, 0, -ry - 14);
 
   ctx.restore();
 }
@@ -4430,34 +4638,81 @@ function drawBoss(ctx: CanvasRenderingContext2D, state: RenderState) {
     ctx.stroke();
   }
 
-  // Level 1 Boss uses EXACT Title-Screen Art palette (gunmetal-slate + neon-green compound eyes + iridescent wings)!
+  // Horror + Anime + Xenomorph Bio-Mechanical Arthropod Boss Hulls (for !boss.isMiniBoss Levels 1..5)
   const levelPalettes: Record<
     LevelNumber,
     { body: string; bodyP2: string; trim: string; eye: string; crown: string }
-  > = {
-    1: { body: '#1E293B', bodyP2: '#4C1D95', trim: '#E11D48', eye: '#4ADE80', crown: '#FACC15' },
-    2: { body: '#0F766E', bodyP2: '#9A3412', trim: '#FB7185', eye: '#FACC15', crown: '#FDE047' },
-    3: { body: '#1E1B4B', bodyP2: '#7F1D1D', trim: '#FACC15', eye: '#E879F9', crown: '#FACC15' },
-    4: { body: '#18181B', bodyP2: '#881337', trim: '#22D3EE', eye: '#22D3EE', crown: '#FDE047' },
-    5: { body: '#292524', bodyP2: '#7F1D1D', trim: '#DC2626', eye: '#F43F5E', crown: '#FACC15' },
-  };
+  > = boss.isMiniBoss
+    ? {
+        1: { body: '#1E293B', bodyP2: '#4C1D95', trim: '#E11D48', eye: '#4ADE80', crown: '#FACC15' },
+        2: { body: '#0F766E', bodyP2: '#9A3412', trim: '#FB7185', eye: '#FACC15', crown: '#FDE047' },
+        3: { body: '#1E1B4B', bodyP2: '#7F1D1D', trim: '#FACC15', eye: '#E879F9', crown: '#FACC15' },
+        4: { body: '#18181B', bodyP2: '#881337', trim: '#22D3EE', eye: '#22D3EE', crown: '#FDE047' },
+        5: { body: '#292524', bodyP2: '#7F1D1D', trim: '#DC2626', eye: '#F43F5E', crown: '#FACC15' },
+      }
+    : {
+        1: { body: '#0F172A', bodyP2: '#3B0764', trim: '#F43F5E', eye: '#A3E635', crown: '#38BDF8' },
+        2: { body: '#18181B', bodyP2: '#7F1D1D', trim: '#DC2626', eye: '#BEF264', crown: '#FB7185' },
+        3: { body: '#111827', bodyP2: '#581C87', trim: '#F59E0B', eye: '#F43F5E', crown: '#FDE047' },
+        4: { body: '#090D16', bodyP2: '#881337', trim: '#22D3EE', eye: '#FB7185', crown: '#E879F9' },
+        5: { body: '#0B090C', bodyP2: '#7F1D1D', trim: '#E11D48', eye: '#FACC15', crown: '#FACC15' },
+      };
   const pal = levelPalettes[boss.level];
 
-  // Level-Matched Animal Boss Wings (Level 1 = Giant Title-Art Pink-Purple-Cyan Iridescent Wings!)
-  drawLevelSpecificWings(ctx, boss.level, 114, 28, time, 0.4, isFlash, true);
+  if (boss.isMiniBoss || boss.level >= 3) {
+    drawLevelSpecificWings(ctx, boss.level, 114, 28, time, 0.4, isFlash, true);
+  }
 
-  // Level 3 Bombus Titán (giant armored bumblebee) & Level 4 Empusa (stealth mantis) wear twin rocket pods!
+  // Level 5 Escorpión Emperador: Massive arching Xenomorph Scorpion Tail & Dripping Venom Telson overhead!
+  if (!boss.isMiniBoss && boss.level === 5) {
+    const tailWag = Math.sin(time * 4.6) * 5;
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 3.2;
+    const segs: [number, number, number][] = [
+      [48, -14, 15],
+      [62, -34, 13],
+      [54, -56, 11],
+      [32, -68 + tailWag * 0.4, 10],
+      [6, -70 + tailWag * 0.6, 9],
+      [-20, -64 + tailWag, 10],
+    ];
+    for (const [sx, sy, sr] of segs) {
+      ctx.fillStyle = isFlash ? '#FFFFFF' : '#18181B';
+      ctx.beginPath();
+      ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      if (!isFlash) {
+        ctx.fillStyle = '#E11D48';
+        ctx.beginPath();
+        ctx.arc(sx - 2, sy - 2, sr * 0.34, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // Glowing razor xenomorph stinger bulb & fang!
+    ctx.fillStyle = isFlash ? '#FFFFFF' : '#F43F5E';
+    ctx.beginPath();
+    ctx.moveTo(-24, -64 + tailWag);
+    ctx.lineTo(-48, -56 + tailWag);
+    ctx.lineTo(-56, -42 + tailWag);
+    ctx.lineTo(-32, -52 + tailWag);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // Level 3 Avispa Xeno-Reina & Level 4 Mantis Espectral wear twin biomech thrusters
   if ((boss.level === 3 || boss.level === 4) && !isFlash) {
     const flame = 16 + Math.sin(time * 40) * 6;
     for (const sy of [-28, 28]) {
-      ctx.fillStyle = boss.level === 4 ? '#22D3EE' : '#F97316';
+      ctx.fillStyle = boss.level === 4 ? '#22D3EE' : '#F43F5E';
       ctx.beginPath();
       ctx.moveTo(52, sy - 6);
       ctx.lineTo(52 + flame, sy);
       ctx.lineTo(52, sy + 6);
       ctx.closePath();
       ctx.fill();
-      ctx.fillStyle = '#334155';
+      ctx.fillStyle = '#1E293B';
       ctx.strokeStyle = INK;
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -4467,33 +4722,64 @@ function drawBoss(ctx: CanvasRenderingContext2D, state: RenderState) {
     }
   }
 
-  // 6 Giant Articulated Jointed Boss Legs hanging underneath!
-  drawSixJointedLegs(ctx, 48, time, 0.6, isFlash, boss.level === 1 ? '#334155' : pal.body);
+  drawSixJointedLegs(ctx, 48, time, 0.6, isFlash, boss.isMiniBoss && boss.level === 1 ? '#334155' : pal.body);
 
-  // Bespoke Animal Carapace Geometry per Level
+  // Bespoke Carapace Geometry (Horror + Anime + Xenomorph for Final Bosses!)
   const traceBossHull = () => {
     ctx.beginPath();
-    if (boss.level === 2) {
-      // Cicada Rítmica: broad cicada head + tapered singing abdomen
+    if (!boss.isMiniBoss && boss.level === 1) {
+      // TRILOBITES ABISAL: wide ribbed armored fossil dome + extended xenomorph cranial crown!
+      ctx.moveTo(-72, 6);
+      ctx.quadraticCurveTo(-56, -46, 2, -44);
+      ctx.lineTo(66, -34);
+      ctx.quadraticCurveTo(84, -4, 66, 32);
+      ctx.lineTo(-4, 42);
+      ctx.quadraticCurveTo(-56, 38, -72, 6);
+      ctx.closePath();
+    } else if (!boss.isMiniBoss && boss.level === 2) {
+      // MARIQUITA PARÁSITA: sinister split armored beetle dome with alien cranial crest!
+      ctx.moveTo(-66, 4);
+      ctx.quadraticCurveTo(-48, -48, 12, -46);
+      ctx.quadraticCurveTo(64, -36, 68, 4);
+      ctx.quadraticCurveTo(56, 44, -18, 42);
+      ctx.quadraticCurveTo(-56, 36, -66, 4);
+      ctx.closePath();
+    } else if (!boss.isMiniBoss && boss.level === 3) {
+      // AVISPA XENO-REINA: elongated alien xenomorph dome head + wasp pinched waist & venomous tail!
+      ctx.moveTo(-70, 2);
+      ctx.quadraticCurveTo(-36, -42, 8, -32);
+      ctx.lineTo(74, -22);
+      ctx.quadraticCurveTo(86, 0, 74, 22);
+      ctx.lineTo(8, 32);
+      ctx.quadraticCurveTo(-40, 42, -70, 2);
+      ctx.closePath();
+    } else if (boss.level === 4) {
+      // MANTIS ESPECTRAL: gaunt angular xeno-mantis thorax + crest blade
+      ctx.moveTo(-72, 2);
+      ctx.lineTo(-34, -40);
+      ctx.lineTo(42, -42);
+      ctx.lineTo(76, -8);
+      ctx.lineTo(44, 34);
+      ctx.lineTo(-32, 38);
+      ctx.closePath();
+    } else if (boss.level === 5 && !boss.isMiniBoss) {
+      // ESCORPIÓN EMPERADOR: broad armored arachnid prosoma & serrated carapace!
+      ctx.moveTo(-64, 0);
+      ctx.lineTo(-34, -40);
+      ctx.lineTo(46, -34);
+      ctx.lineTo(64, 0);
+      ctx.lineTo(46, 36);
+      ctx.lineTo(-34, 40);
+      ctx.closePath();
+    } else if (boss.level === 2) {
       ctx.moveTo(-64, 0);
       ctx.quadraticCurveTo(-36, -42, 24, -36);
       ctx.quadraticCurveTo(68, -16, 68, 8);
       ctx.quadraticCurveTo(44, 38, -28, 36);
       ctx.closePath();
     } else if (boss.level === 3) {
-      // Bombus Titán: round fuzzy armored Bumblebee
       ctx.ellipse(-4, 0, 58, 44, 0.04, 0, Math.PI * 2);
-    } else if (boss.level === 4) {
-      // Empusa Stealth: angular Praying Mantis thorax & blade abdomen
-      ctx.moveTo(-68, 4);
-      ctx.lineTo(-34, -36);
-      ctx.lineTo(28, -40);
-      ctx.lineTo(66, -4);
-      ctx.lineTo(42, 32);
-      ctx.lineTo(-28, 36);
-      ctx.closePath();
     } else if (boss.level === 5) {
-      // Cóndor-Tábano / Beelzebot: majestic broad condor-insect fuselage
       ctx.moveTo(-66, 4);
       ctx.lineTo(-38, -42);
       ctx.lineTo(6, -46);
@@ -4504,7 +4790,6 @@ function drawBoss(ctx: CanvasRenderingContext2D, state: RenderState) {
       ctx.lineTo(-34, 42);
       ctx.closePath();
     } else {
-      // Level 1 Tabanus Rex: Exact Giant Title-Art Insectoid Horsefly Monarch!
       ctx.moveTo(-64, 4);
       ctx.quadraticCurveTo(-36, -44, 24, -38);
       ctx.quadraticCurveTo(66, -24, 64, 10);
@@ -4523,41 +4808,104 @@ function drawBoss(ctx: CanvasRenderingContext2D, state: RenderState) {
     traceBossHull();
     ctx.clip();
     drawLevelCarapaceTexture(ctx, boss.level, 58, beatPulse);
+    // Biomechanical xenomorph glowing spine/rib sutures across every final boss!
+    if (!boss.isMiniBoss) {
+      ctx.strokeStyle = pal.trim;
+      ctx.lineWidth = 2.2;
+      for (let rx = -24; rx <= 44; rx += 16) {
+        ctx.beginPath();
+        ctx.arc(rx, 0, 44, -Math.PI * 0.44, Math.PI * 0.44);
+        ctx.stroke();
+      }
+      if (boss.level === 2) {
+        // Mariquita crimson blood-red elytra dome & glowing parasite spots!
+        ctx.fillStyle = '#991B1B';
+        ctx.fillRect(-16, -48, 86, 96);
+        ctx.strokeStyle = '#090D16';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(-16, 0);
+        ctx.lineTo(72, 0);
+        ctx.stroke();
+        const spots: [number, number, number][] = [
+          [8, -22, 9],
+          [34, -14, 10],
+          [14, 22, 9],
+          [42, 18, 8],
+        ];
+        for (const [sx, sy, sr] of spots) {
+          ctx.fillStyle = '#090D16';
+          ctx.beginPath();
+          ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#BEF264';
+          ctx.beginPath();
+          ctx.arc(sx, sy, sr * (0.4 + beatPulse * 0.25), 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
     ctx.restore();
   }
 
-  ctx.strokeStyle = boss.level === 5 && !isFlash ? '#FACC15' : INK;
+  ctx.strokeStyle = boss.level === 5 && !isFlash ? '#FACC15' : !boss.isMiniBoss && !isFlash ? pal.trim : INK;
   ctx.lineWidth = 3.5;
   traceBossHull();
   ctx.stroke();
 
-  // Level-Specific Animal Anatomy Features on Bosses:
-  if (boss.level === 2 && !isFlash) {
-    // Cicada vibrating abdominal tymbal sound drums!
-    const vib = Math.sin(time * 36) * 2;
-    ctx.fillStyle = '#FACC15';
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 2;
+  // Bespoke Final Boss Anatomical Features (Trilobites, Mariquita, Avispa, Mantis, Escorpión)
+  if (!boss.isMiniBoss && boss.level === 1 && !isFlash) {
+    // Trilobites axial spine ridges + acid dorsal fissure
+    ctx.strokeStyle = '#38BDF8';
+    ctx.lineWidth = 2.6;
     ctx.beginPath();
-    ctx.ellipse(22, 16, 15 + vib, 10, 0.2, 0, Math.PI * 2);
+    ctx.moveTo(-48, 0);
+    ctx.lineTo(62, 0);
+    ctx.stroke();
+  } else if (!boss.isMiniBoss && boss.level === 3) {
+    // Avispa Xeno-Reina serrated front venomous stinger lance!
+    ctx.fillStyle = isFlash ? '#FFFFFF' : '#F43F5E';
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.moveTo(-64, -5);
+    ctx.lineTo(-104, 0);
+    ctx.lineTo(-64, 7);
+    ctx.closePath();
     ctx.fill();
     ctx.stroke();
   } else if (boss.level === 4) {
-    // Giant articulated Praying Mantis raptorial scythe blades!
-    ctx.fillStyle = isFlash ? '#FFFFFF' : '#22D3EE';
+    // Mantis Espectral horror bone-scythe forearms!
+    ctx.fillStyle = isFlash ? '#FFFFFF' : boss.isMiniBoss ? '#22D3EE' : '#F43F5E';
     ctx.strokeStyle = INK;
     ctx.lineWidth = 2.6;
     ctx.beginPath();
     ctx.moveTo(-42, 22);
-    ctx.lineTo(-82, 48);
-    ctx.lineTo(-96, 12);
-    ctx.lineTo(-74, 26);
+    ctx.lineTo(-92, 54);
+    ctx.lineTo(-106, 10);
+    ctx.lineTo(-78, 28);
     ctx.lineTo(-52, 14);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
+  } else if (!boss.isMiniBoss && boss.level === 5) {
+    // Escorpión Emperador twin colossal xenomorph pincer claws!
+    for (const side of [-1, 1]) {
+      ctx.fillStyle = isFlash ? '#FFFFFF' : '#7F1D1D';
+      ctx.strokeStyle = '#FACC15';
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.moveTo(-44, side * 24);
+      ctx.quadraticCurveTo(-76, side * 46, -98, side * 26);
+      ctx.lineTo(-74, side * 18);
+      ctx.lineTo(-92, side * 8);
+      ctx.quadraticCurveTo(-66, side * 12, -44, side * 14);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
   } else if (boss.level === 5 && !isFlash) {
-    // Iconic White Fluffy Andean Condor Neck Ruff!
+    // Mini-boss Condor-Tábano neck ruff
     ctx.fillStyle = '#F8FAFC';
     ctx.strokeStyle = INK;
     ctx.lineWidth = 2.2;
@@ -4567,16 +4915,15 @@ function drawBoss(ctx: CanvasRenderingContext2D, state: RenderState) {
       ctx.fill();
       ctx.stroke();
     }
-  } else if (!isFlash) {
-    // Subtle royal sash across carapace
-    ctx.fillStyle = pal.trim;
+  } else if (boss.level === 2 && boss.isMiniBoss && !isFlash) {
+    const vib = Math.sin(time * 36) * 2;
+    ctx.fillStyle = '#FACC15';
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(-6, -34);
-    ctx.lineTo(10, -34);
-    ctx.lineTo(18, 36);
-    ctx.lineTo(2, 36);
-    ctx.closePath();
+    ctx.ellipse(22, 16, 15 + vib, 10, 0.2, 0, Math.PI * 2);
     ctx.fill();
+    ctx.stroke();
   }
 
   drawSubtleCoronet(
@@ -4589,36 +4936,43 @@ function drawBoss(ctx: CanvasRenderingContext2D, state: RenderState) {
     isFlash
   );
 
-  // Heavy insectoid mandibles / condor beak
-  ctx.fillStyle = isFlash ? '#FFFFFF' : boss.isMiniBoss ? '#38BDF8' : pal.crown;
+  // Heavy xenomorph pharyngeal mandibles (double horror jaw for final bosses!)
+  ctx.fillStyle = isFlash ? '#FFFFFF' : boss.isMiniBoss ? '#38BDF8' : '#E2E8F0';
   ctx.strokeStyle = INK;
   ctx.lineWidth = 2.5;
   ctx.beginPath();
   ctx.moveTo(-48, -18);
-  ctx.lineTo(-78, -28);
+  ctx.lineTo(-82, -30);
   ctx.lineTo(-56, -6);
-  ctx.lineTo(-82, 4);
+  ctx.lineTo(-88, 3);
   ctx.lineTo(-56, 12);
-  ctx.lineTo(-76, 28);
+  ctx.lineTo(-80, 30);
   ctx.lineTo(-48, 18);
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
 
-  // Giant Faceted Compound Eye (Level 1 = Glowing Neon-Green Title-Art Compound Eye!)
-  if (boss.level === 1 && !isFlash) {
-    ctx.fillStyle = 'rgba(74, 222, 128, 0.28)';
+  // Glowing Anime + Horror Compound / Xenomorph Multi-Eyes!
+  if (!boss.isMiniBoss && !isFlash) {
+    ctx.fillStyle = pal.eye;
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2.4;
+    // Cluster of eerie horror eyes along brow
+    for (let e = 0; e < 3; e++) {
+      ctx.beginPath();
+      ctx.ellipse(-36 + e * 10, -14 + e * 9, 8.5 - e * 1.2, 11 - e * 1.5, -0.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  } else {
+    ctx.fillStyle = isFlash ? '#FFFFFF' : phase2 ? '#F43F5E' : pal.eye;
+    ctx.strokeStyle = boss.level === 4 || boss.isMiniBoss ? pal.crown : INK;
+    ctx.lineWidth = 3.2;
     ctx.beginPath();
-    ctx.ellipse(-30, -4, 22, 28, -0.2, 0, Math.PI * 2);
+    ctx.ellipse(-30, -4, 16, 22, -0.2, 0, Math.PI * 2);
     ctx.fill();
+    ctx.stroke();
   }
-  ctx.fillStyle = isFlash ? '#FFFFFF' : phase2 ? '#F43F5E' : pal.eye;
-  ctx.strokeStyle = boss.level === 4 || boss.isMiniBoss ? pal.crown : INK;
-  ctx.lineWidth = 3.2;
-  ctx.beginPath();
-  ctx.ellipse(-30, -4, 16, 22, -0.2, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
 
   if (!isFlash) {
     if (boss.level === 1) {
@@ -5145,6 +5499,48 @@ export function renderGameFrame(ctx: CanvasRenderingContext2D, state: RenderStat
       ctx.beginPath();
       ctx.arc(0, 0, b.radius, -Math.PI * 0.32, Math.PI * 0.32);
       ctx.stroke();
+    } else if (b.kind === 'palito_heart') {
+      // Palito Pink Glowing Charm Heart (slows & gradually charms enemies!)
+      const pulse = 1 + Math.sin(state.time * 12 + b.age * 8) * 0.08;
+      ctx.scale(pulse, pulse);
+      ctx.fillStyle = 'rgba(244, 114, 182, 0.32)';
+      ctx.beginPath();
+      ctx.arc(0, 0, b.radius + 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#EC4899';
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 1.9;
+      ctx.beginPath();
+      ctx.moveTo(0, b.radius * 0.95);
+      ctx.bezierCurveTo(-b.radius * 1.25, b.radius * 0.1, -b.radius * 1.15, -b.radius * 1.05, 0, -b.radius * 0.35);
+      ctx.bezierCurveTo(b.radius * 1.15, -b.radius * 1.05, b.radius * 1.25, b.radius * 0.1, 0, b.radius * 0.95);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#FCE7F3';
+      ctx.beginPath();
+      ctx.arc(-b.radius * 0.3, -b.radius * 0.25, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (b.kind === 'apex_fusion_auto' || b.kind === 'apex_fusion_manual') {
+      // Dual Max-Level Super Saiyan Fused Energy Projectile!
+      ctx.rotate(angle);
+      const isManual = b.kind === 'apex_fusion_manual';
+      ctx.fillStyle = isManual ? 'rgba(250, 204, 21, 0.36)' : 'rgba(250, 204, 21, 0.25)';
+      ctx.beginPath();
+      ctx.ellipse(-2, 0, b.radius * 1.45, b.radius * 1.1, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = b.color;
+      ctx.strokeStyle = b.glowColor || '#FEF08A';
+      ctx.lineWidth = isManual ? 3.2 : 2.2;
+      ctx.beginPath();
+      ctx.moveTo(b.radius * 1.35, 0);
+      ctx.lineTo(-b.radius * 0.6, b.radius * 0.72);
+      ctx.lineTo(-b.radius * 0.2, 0);
+      ctx.lineTo(-b.radius * 0.6, -b.radius * 0.72);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
     } else if (b.kind === 'mate_shot') {
       // Carpincho Matero hot yerba-mate splash droplet
       ctx.rotate(angle);
@@ -5186,15 +5582,14 @@ export function renderGameFrame(ctx: CanvasRenderingContext2D, state: RenderStat
   drawBoss(ctx, state);
 
   // Enemy Bullets & Physics-Driven Boss Projectiles:
-  // ALL enemy projectiles cycle rapidly through vivid multicolor hues with a high-contrast dual border!
+  // Indexed into precomputed HSL LUTs to eliminate per-bullet string allocations!
   let ebIdx = 0;
   for (const eb of state.enemyBullets) {
     if (!eb.active) continue;
     ebIdx++;
-    const hue = (state.time * 820 + eb.age * 960 + ebIdx * 57) % 360;
-    const altHue = (hue + 145) % 360;
-    const multiFill = `hsl(${hue}, 100%, 56%)`;
-    const multiCore = `hsl(${altHue}, 100%, 72%)`;
+    const lutIdx = Math.floor(((state.time * 82 + eb.age * 96 + ebIdx * 5) % BULLET_LUT_SIZE + BULLET_LUT_SIZE) % BULLET_LUT_SIZE);
+    const multiFill = ENEMY_BULLET_FILL_LUT[lutIdx];
+    const multiCore = ENEMY_BULLET_CORE_LUT[lutIdx];
 
     ctx.save();
     ctx.translate(eb.x, eb.y);
@@ -5319,6 +5714,9 @@ export function renderGameFrame(ctx: CanvasRenderingContext2D, state: RenderStat
     ctx.restore();
   }
 
+  // Dimensional Portal (Boss Clear -> Next Level / Reina Nodriza Teaser, or Level Entry)
+  drawDimensionalPortal(ctx, state);
+
   // Pet Special Effects: Palito Love Wave, Batricio Poisonous Female Frogs Rain, Carpincho Infernales Cavalry, Sicario Mafia Squad
   drawPalitoLoveWave(ctx, state);
   drawPoisonFrogsRain(ctx, state);
@@ -5327,37 +5725,36 @@ export function renderGameFrame(ctx: CanvasRenderingContext2D, state: RenderStat
   drawPetCompanion(ctx, state);
   drawHeroBiplane(ctx, state);
 
-  // Pooled Particles
+  // Pooled Particles (flat state, zero ctx.save/restore overhead per particle!)
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 1.4;
   for (const pt of state.particles) {
     if (!pt.active) continue;
     const alpha = Math.max(0, pt.life / pt.maxLife);
-    ctx.save();
     ctx.globalAlpha = alpha;
     ctx.fillStyle = pt.color;
     ctx.beginPath();
     ctx.arc(pt.x, pt.y, pt.size * (0.4 + alpha * 0.6), 0, Math.PI * 2);
     ctx.fill();
     if (pt.outlined) {
-      ctx.strokeStyle = INK;
-      ctx.lineWidth = 1.4;
       ctx.stroke();
     }
-    ctx.restore();
   }
+  ctx.globalAlpha = 1;
 
-  // Floating Anime Callouts
-  for (const c of state.callouts) {
-    const alpha = Math.min(1, c.life / Math.max(0.1, c.maxLife));
-    ctx.save();
-    ctx.globalAlpha = alpha;
+  // Floating Anime Callouts (shared font & outline state outside loop)
+  if (state.callouts.length > 0) {
     ctx.font = '800 14px Outfit, sans-serif';
     ctx.textAlign = 'center';
     ctx.strokeStyle = INK;
     ctx.lineWidth = 3.5;
-    ctx.strokeText(c.text, c.x, c.y);
-    ctx.fillStyle = c.color;
-    ctx.fillText(c.text, c.x, c.y);
-    ctx.restore();
+    for (const c of state.callouts) {
+      ctx.globalAlpha = Math.min(1, c.life / Math.max(0.1, c.maxLife));
+      ctx.strokeText(c.text, c.x, c.y);
+      ctx.fillStyle = c.color;
+      ctx.fillText(c.text, c.x, c.y);
+    }
+    ctx.globalAlpha = 1;
   }
 
   ctx.restore();

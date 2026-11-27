@@ -3,6 +3,7 @@ import type {
   EnemyArchetypeId,
   FusedLoadout,
   GameConfig,
+  LevelNumber,
   PetId,
   ProjectileDescriptor,
   SpeciesId,
@@ -45,6 +46,7 @@ export interface SimEnemyState {
   orbitCenterX: number;
   orbitCenterY: number;
   // Palito love charm (prevents shooting & orbits slowly in circles) + Batricio female frog venom DoT
+  charmBuildup?: number;
   charmedTimer?: number;
   charmAnchorX?: number;
   charmAnchorY?: number;
@@ -203,6 +205,13 @@ export function computeFusedLoadout(levels: SpeciesLevels, config: GameConfig): 
 
   const activeSpecies = ALL_SPECIES.filter((s) => safeLevels[s] > 0);
   const secretEvolution = activeSpecies.length === 1 && safeLevels[activeSpecies[0]] >= 5 ? activeSpecies[0] : null;
+  const isSuperSaiyanFusion =
+    activeSpecies.length === 2 &&
+    safeLevels[activeSpecies[0]] >= STANDARD_MAX_LEVEL &&
+    safeLevels[activeSpecies[1]] >= STANDARD_MAX_LEVEL;
+  const fusedPair: [SpeciesId, SpeciesId] | null = isSuperSaiyanFusion
+    ? [activeSpecies[0], activeSpecies[1]]
+    : null;
   const dLv = safeLevels.dionaea;
   const drLv = safeLevels.drosera;
   const nLv = safeLevels.nepenthes;
@@ -219,6 +228,9 @@ export function computeFusedLoadout(levels: SpeciesLevels, config: GameConfig): 
     if (lv > 0) {
       rateBoost *= config.species[id].fireRateMultiplier * (1 + (lv - 1) * 0.08);
     }
+  }
+  if (isSuperSaiyanFusion) {
+    rateBoost *= 1.14;
   }
 
   const fireInterval = Math.max(0.055, config.player.baseFireInterval / rateBoost);
@@ -249,6 +261,8 @@ export function computeFusedLoadout(levels: SpeciesLevels, config: GameConfig): 
     levels: safeLevels,
     activeSpecies,
     secretEvolution,
+    isSuperSaiyanFusion,
+    fusedPair,
     fireInterval,
     dionaeaLevel: dLv,
     dionaeaDamage: Math.round(dBase * (1 + (dLv - 1) * 0.22)),
@@ -2521,6 +2535,242 @@ export function computeRelativeTouchTarget(
     x: anchorPlayerX + (currentPointerX - anchorPointerX) * sensitivity,
     y: anchorPlayerY + (currentPointerY - anchorPointerY) * sensitivity,
   };
+}
+
+// ============================================================================
+// PET COMBAT CONSTANTS & SLOW-CHARMING HEARTS (PALITO / CARPINCHO)
+// ============================================================================
+
+export const CARPINCHO_FACON_RANGE = 250;
+export const PALITO_CHARM_HITS_REQUIRED = 3;
+
+/**
+ * Aplica acumulación lenta de enamoramiento con los corazones de Palito:
+ * cada impacto frena gradualmente al enemigo y al 3er impacto lo enamora por completo.
+ */
+export function applyPalitoHeartCharm(
+  enemy: SimEnemyState,
+  nowX = enemy.x,
+  nowY = enemy.y
+): { charmed: boolean; buildup: number } {
+  const nextBuildup = (enemy.charmBuildup ?? 0) + 1;
+  enemy.charmBuildup = nextBuildup;
+  enemy.slowTimer = Math.max(enemy.slowTimer, 1.9);
+  enemy.slowFactor = Math.max(enemy.slowFactor, Math.min(0.68, 0.22 + nextBuildup * 0.14));
+  if (nextBuildup >= PALITO_CHARM_HITS_REQUIRED) {
+    enemy.charmBuildup = 0;
+    enemy.windupTimer = 0;
+    enemy.charmedTimer = Math.max(enemy.charmedTimer ?? 0, 3.8);
+    enemy.charmAnchorX = nowX;
+    enemy.charmAnchorY = nowY;
+    enemy.charmAngle = enemy.charmAngle ?? 0;
+    return { charmed: true, buildup: 0 };
+  }
+  return { charmed: false, buildup: nextBuildup };
+}
+
+// ============================================================================
+// HORROR + ANIME + XENOMORPH BOSS SCALING (HP × X/2, X MECHANICS PER LEVEL)
+// ============================================================================
+
+export const BOSS_BASE_HP: Record<LevelNumber, number> = {
+  1: 1420,
+  2: 1840,
+  3: 2260,
+  4: 2740,
+  5: 3500,
+};
+
+export function computeBossScaledMaxHp(baseHp: number, level: LevelNumber): number {
+  return Math.round(baseHp * (level / 2));
+}
+
+export const BOSS_MECHANICS_BY_LEVEL: Record<LevelNumber, readonly string[]> = {
+  1: ['trilobite_carapace_burst'],
+  2: ['ladybug_bouncy_eggs', 'ladybug_elytra_swarm'],
+  3: ['wasp_stinger_volley', 'wasp_predator_lunge', 'wasp_venom_mortars'],
+  4: ['mantis_spectral_blink', 'mantis_scythe_boomerangs', 'mantis_optic_twin_beams', 'mantis_ricochet_barrage'],
+  5: ['scorpion_gale_roar', 'scorpion_gravity_telson', 'scorpion_chitin_meteors', 'scorpion_acid_beam', 'scorpion_pincer_nova'],
+};
+
+// ============================================================================
+// DUAL MAX-LEVEL APEX FUSION (LV.4 + LV.4 SUPER SAIYAN MODE)
+// ============================================================================
+
+export interface ApexFusionMeta {
+  title: string;
+  autoName: string;
+  manualName: string;
+  cooldownSec: number;
+  primaryColor: string;
+  secondaryColor: string;
+}
+
+const FUSION_AUTO_TRAIT_NAME: Record<SpeciesId, string> = {
+  dionaea: 'Fauces',
+  drosera: 'Rocío',
+  nepenthes: 'Ácido',
+  utricularia: 'Vacío',
+  sarracenia: 'Turbina',
+  pinguicula: 'Prisma',
+  heliamphora: 'Hélice',
+  cephalotus: 'Mortero',
+};
+
+const FUSION_MANUAL_NOUN: Record<SpeciesId, string> = {
+  dionaea: 'Guillotina',
+  drosera: 'Red Pegajosa',
+  nepenthes: 'Erupción',
+  utricularia: 'Singularidad',
+  sarracenia: 'Salva Jet',
+  pinguicula: 'Tormenta',
+  heliamphora: 'Nova Solar',
+  cephalotus: 'Racimo',
+};
+
+export function getApexFusionMeta(a: SpeciesId, b: SpeciesId, config?: GameConfig): ApexFusionMeta {
+  const [first, second] = ALL_SPECIES.indexOf(a) <= ALL_SPECIES.indexOf(b) ? [a, b] : [b, a];
+  const priCol = config?.species[first]?.accentColor ?? '#FACC15';
+  const secCol = config?.species[second]?.accentColor ?? '#38BDF8';
+  return {
+    title: `FUSIÓN SSJ · ${FUSION_AUTO_TRAIT_NAME[first].toUpperCase()} + ${FUSION_AUTO_TRAIT_NAME[second].toUpperCase()}`,
+    autoName: `${FUSION_AUTO_TRAIT_NAME[first]}-${FUSION_AUTO_TRAIT_NAME[second]} SSJ`,
+    manualName: `${FUSION_MANUAL_NOUN[first]} × ${FUSION_AUTO_TRAIT_NAME[second]}`,
+    cooldownSec: 1.15,
+    primaryColor: priCol,
+    secondaryColor: secCol,
+  };
+}
+
+function accumulateDualSpeciesTraits(
+  pair: readonly [SpeciesId, SpeciesId],
+  levels: SpeciesLevels,
+  config: GameConfig,
+  isManual: boolean
+) {
+  const [a, b] = pair;
+  const spA = config.species[a];
+  const spB = config.species[b];
+  const avgDmg = (spA.damage + spB.damage) * 0.5;
+  const lvScale = 1 + ((levels[a] + levels[b]) * 0.5 - 1) * 0.25;
+
+  const has = (id: SpeciesId) => a === id || b === id;
+  return {
+    baseDmg: Math.round(avgDmg * lvScale * (isManual ? 3.9 : 1.38)),
+    color: spA.accentColor,
+    glowColor: '#FACC15',
+    accentSecondary: spB.accentColor,
+    slowFactor: has('drosera') ? (isManual ? 0.78 : 0.58) : has('pinguicula') ? (isManual ? 0.65 : 0.48) : 0,
+    rootDuration: has('drosera') && isManual ? 2.2 : 0,
+    acidDps: has('nepenthes') ? Math.round(spA.traitStrength * (isManual ? 2.2 : 1.15)) : 0,
+    acidRadius: has('nepenthes') ? (isManual ? 122 : 74) : 0,
+    chainAcid: has('nepenthes'),
+    pullStrength: has('utricularia') ? (isManual ? 300 : 195) : 0,
+    spawnsVortex: has('utricularia'),
+    accelX: has('sarracenia') ? (isManual ? 1350 : 720) : isManual ? 320 : 120,
+    bounces: has('pinguicula') ? (isManual ? 4 : 3) : has('drosera') ? 2 : 0,
+    bounceCeiling: has('pinguicula'),
+    sinWaveAmp: has('heliamphora') ? (isManual ? 260 : 155) : 0,
+    sinWaveFreq: has('heliamphora') ? 11.5 : 0,
+    splitsOnHit: has('cephalotus') ? (isManual ? 5 : 2) : 0,
+    clearsEnemyBullets: has('dionaea') || has('utricularia') || isManual,
+    armorPierce: has('dionaea') || has('nepenthes') || has('sarracenia') || has('cephalotus') || isManual,
+    piercing: has('dionaea') || has('utricularia') || has('sarracenia') || has('heliamphora') || isManual,
+  };
+}
+
+/**
+ * Ataque automático fusionado al alcanzar Nv.4 + Nv.4 (Modo Super Saiyajin).
+ * Combina rasgos reales de ambas especies activas en ráfaga automática de alto calibre.
+ */
+export function buildApexFusionPrimaryPattern(
+  a: SpeciesId,
+  b: SpeciesId,
+  levels: SpeciesLevels,
+  shotIndex: number,
+  config: GameConfig
+): ProjectileDescriptor[] {
+  const t = accumulateDualSpeciesTraits([a, b], levels, config, false);
+  const lanes = shotIndex % 3 === 0 ? [-1.5, -0.5, 0.5, 1.5] : [-1, 0, 1];
+  const shots: ProjectileDescriptor[] = [];
+
+  for (const lane of lanes) {
+    const useAltColor = Math.abs(lane) > 0.7;
+    shots.push({
+      kind: 'apex_fusion_auto',
+      offsetX: 34 - Math.abs(lane) * 2,
+      offsetY: lane * 10,
+      vx: t.accelX > 400 ? 440 : 760,
+      vy: lane * 68,
+      accelX: t.accelX,
+      gravity: t.splitsOnHit > 0 && !t.sinWaveAmp && !t.bounceCeiling ? 240 : 0,
+      drag: 0.999,
+      bounces: t.bounces,
+      bounceCeiling: t.bounceCeiling,
+      splitsOnHit: lane === 0 || Math.abs(lane) === 0.5 ? t.splitsOnHit : 0,
+      damage: t.baseDmg,
+      radius: 10.5,
+      color: useAltColor ? t.accentSecondary : '#FACC15',
+      glowColor: useAltColor ? '#FACC15' : t.color,
+      slowFactor: t.slowFactor,
+      acidDps: t.acidDps,
+      acidRadius: t.acidRadius,
+      armorPierce: t.armorPierce,
+      chainAcid: t.chainAcid,
+      pullStrength: t.pullStrength,
+      spawnsVortex: t.spawnsVortex && Math.abs(lane) <= 0.5,
+      piercing: t.piercing,
+      clearsEnemyBullets: t.clearsEnemyBullets && shotIndex % 3 === 0 && Math.abs(lane) <= 0.5,
+      sinWaveAmp: t.sinWaveAmp ? (lane >= 0 ? 1 : -1) * t.sinWaveAmp : 0,
+      sinWaveFreq: t.sinWaveFreq,
+    });
+  }
+
+  return shots;
+}
+
+/**
+ * Habilidad secundaria manual fusionada (Nv.4 + Nv.4 Modo Super Saiyajin).
+ * El jugador la dispara manualmente combinando los poderes definitivos de ambas especies.
+ */
+export function buildApexFusionSecondaryPattern(
+  a: SpeciesId,
+  b: SpeciesId,
+  levels: SpeciesLevels,
+  config: GameConfig
+): ProjectileDescriptor[] {
+  const t = accumulateDualSpeciesTraits([a, b], levels, config, true);
+  const fan = [-165, 0, 165];
+  return fan.map((vy, idx) => ({
+    kind: 'apex_fusion_manual',
+    offsetX: 38,
+    offsetY: (idx - 1) * 14,
+    vx: 580,
+    vy,
+    accelX: t.accelX,
+    gravity: t.bounces > 0 && idx !== 1 ? 150 : 0,
+    drag: 0.999,
+    bounces: t.bounces,
+    bounceCeiling: t.bounceCeiling,
+    splitsOnHit: idx === 1 ? t.splitsOnHit : 0,
+    damage: t.baseDmg,
+    radius: idx === 1 ? 26 : 19,
+    color: idx === 1 ? '#FACC15' : t.accentSecondary,
+    glowColor: t.color,
+    slowFactor: Math.max(0.35, t.slowFactor),
+    acidDps: t.acidDps,
+    acidRadius: t.acidRadius,
+    armorPierce: true,
+    chainAcid: t.chainAcid,
+    pullStrength: t.pullStrength,
+    spawnsVortex: t.spawnsVortex,
+    piercing: true,
+    isSecondary: true,
+    rootDuration: t.rootDuration,
+    clearsEnemyBullets: true,
+    sinWaveAmp: t.sinWaveAmp ? (idx === 0 ? -1 : idx === 2 ? 1 : 0) * t.sinWaveAmp : 0,
+    sinWaveFreq: t.sinWaveFreq,
+  }));
 }
 
 

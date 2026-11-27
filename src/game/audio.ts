@@ -6,7 +6,7 @@ export const MENU_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Men___Voz_AR__8
 export const LEVEL_1_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Rap_AR__Voz_Argentina__5bdef878.m4a';
 export const LEVEL_2_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Nivel_2_Cumbia_Villera.m4a';
 export const LEVEL_3_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Nivel_3_Boom_Bap__Voz_AR__7c61e348.m4a';
-export const LEVEL_4_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_level_4_1399cdc6.m4a';
+export const LEVEL_4_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Nivel_4_Cuarteto.m4a';
 export const LEVEL_5_MUSIC_SRC = '/assets/aistudio/Dionaea_Strike_-_Nivel_5_Boss__Voz_AR__2a892b6f.m4a';
 
 export const LEVEL_MUSIC_TRACKS: Record<LevelNumber, string> = {
@@ -33,7 +33,7 @@ export const LEVEL_RHYTHM_PROFILES: Record<LevelNumber, LevelRhythmProfile> = {
   1: { bpm: 140, firstDropSec: 0.12, startOffsetSec: 0, beatsPerSpawn: 2.0, trackDurationSec: 164.0 },
   2: { bpm: 96, firstDropSec: 2.0, startOffsetSec: 1.5, beatsPerSpawn: 1.5, trackDurationSec: 65.0 },
   3: { bpm: 118, firstDropSec: 1.82, startOffsetSec: 1.35, beatsPerSpawn: 1.5, trackDurationSec: 180.2 },
-  4: { bpm: 130, firstDropSec: 3.2, startOffsetSec: 2.6, beatsPerSpawn: 1.5, trackDurationSec: 179.1 },
+  4: { bpm: 146, firstDropSec: 0.35, startOffsetSec: 0, beatsPerSpawn: 1.5, trackDurationSec: 60.0 },
   5: { bpm: 118, firstDropSec: 2.02, startOffsetSec: 1.5, beatsPerSpawn: 1.0, trackDurationSec: 151.1 },
 };
 
@@ -818,6 +818,68 @@ class AnimeSoundEngine {
     const notes = [523.25, 659.25, 783.99, 1046.5];
     notes.forEach((n, idx) => {
       this.playTone(n, n * 1.03, 0.24, 'triangle', 0.105, idx * 0.09);
+    });
+  }
+
+  /**
+   * Música moderna estilo anime / J-pop de felicitación al derrotar a un Jefe final
+   * mientras se abre el portal dimensional.
+   */
+  public playBossClearAnimeTheme() {
+    // 1. Bright anime synth lead melody (B major / F# resolution triumph!)
+    const melody: Array<{ freq: number; dur: number; delay: number; next?: number }> = [
+      { freq: 587.33, dur: 0.14, delay: 0.0 },
+      { freq: 659.25, dur: 0.14, delay: 0.12 },
+      { freq: 783.99, dur: 0.18, delay: 0.24 },
+      { freq: 987.77, dur: 0.28, delay: 0.42 },
+      { freq: 880.0, dur: 0.15, delay: 0.72 },
+      { freq: 987.77, dur: 0.15, delay: 0.87 },
+      { freq: 1174.66, dur: 0.36, delay: 1.02, next: 1244.51 },
+      { freq: 1046.5, dur: 0.16, delay: 1.42 },
+      { freq: 1174.66, dur: 0.18, delay: 1.58 },
+      { freq: 1318.51, dur: 0.32, delay: 1.76 },
+      { freq: 1567.98, dur: 0.72, delay: 2.08 },
+    ];
+    for (const note of melody) {
+      this.playTone(note.freq, note.next ?? note.freq * 1.015, note.dur, 'triangle', 0.095, note.delay);
+      this.playTone(note.freq * 0.5, note.freq * 0.5, note.dur * 0.9, 'sawtooth', 0.042, note.delay);
+    }
+
+    // 2. Modern anime chord pad + energetic octave bass stabs
+    const chords: Array<{ delay: number; root: number; triad: [number, number, number] }> = [
+      { delay: 0.0, root: 196.0, triad: [392.0, 493.88, 587.33] },
+      { delay: 0.7, root: 220.0, triad: [440.0, 554.37, 659.25] },
+      { delay: 1.4, root: 246.94, triad: [493.88, 622.25, 739.99] },
+      { delay: 2.08, root: 261.63, triad: [523.25, 659.25, 783.99] },
+    ];
+    for (const ch of chords) {
+      this.playTone(ch.root, ch.root, 0.3, 'sawtooth', 0.068, ch.delay);
+      this.playTone(ch.root * 2, ch.root * 2, 0.16, 'triangle', 0.055, ch.delay + 0.32);
+      for (const f of ch.triad) {
+        this.playTone(f, f * 1.006, 0.55, 'sine', 0.045, ch.delay);
+      }
+    }
+
+    // 3. Sparkling final anime chime arpeggio
+    const sparkles = [1046.5, 1318.51, 1567.98, 2093.0];
+    sparkles.forEach((freq, idx) => {
+      this.playTone(freq, freq * 1.02, 0.42, 'sine', 0.06, 2.24 + idx * 0.075);
+    });
+  }
+
+  public playPortalOpen() {
+    this.playTone(220, 880, 0.52, 'sine', 0.095, 0);
+    this.playTone(330, 1320, 0.56, 'triangle', 0.065, 0.08);
+    this.playTone(660, 440, 0.48, 'sine', 0.05, 0.35);
+  }
+
+  public playSuperSaiyanTransform() {
+    // Explosive golden ki ignition + soaring harmonic power chord!
+    this.playTone(140, 620, 0.28, 'sawtooth', 0.11, 0);
+    this.playTone(210, 930, 0.32, 'triangle', 0.095, 0.04);
+    const burst = [523.25, 659.25, 783.99, 1046.5, 1318.51];
+    burst.forEach((f, idx) => {
+      this.playTone(f, f * 1.04, 0.36, 'triangle', 0.085, 0.12 + idx * 0.055);
     });
   }
 }

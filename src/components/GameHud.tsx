@@ -213,15 +213,17 @@ export function GameHud({
                 })}
                 <span
                   aria-label={
-                    hud.secretEvolution
+                    hud.isSuperSaiyanFusion
+                      ? 'Fusión Super Saiyajin activa'
+                      : hud.secretEvolution
                       ? 'Evolución secreta nivel 5 desbloqueada'
                       : `Evoluciones activas ${hud.activeSlotsCount} de ${hud.maxSlots}`
                   }
                   className={`px-0.5 sm:px-1 text-[10px] font-mono font-bold tabular-nums whitespace-nowrap ${
-                    hud.secretEvolution ? 'text-amber-300' : 'text-slate-300'
+                    hud.isSuperSaiyanFusion || hud.secretEvolution ? 'text-amber-300' : 'text-slate-300'
                   }`}
                 >
-                  {hud.secretEvolution ? 'S5' : `${hud.activeSlotsCount}/${hud.maxSlots}`}
+                  {hud.isSuperSaiyanFusion ? '★ SSJ' : hud.secretEvolution ? 'S5' : `${hud.activeSlotsCount}/${hud.maxSlots}`}
                 </span>
               </div>
             </div>
@@ -606,22 +608,24 @@ export function GameHud({
         <div className="flex items-center gap-1.5">
           {/* Slot 1: Primary Auto-Fire */}
           <div
-            aria-label={`Habilidad principal automática ${primarySp.name}`}
-            title={`Principal (Auto-Disparo): ${primarySp.name}`}
-            className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#0B1422]/88 border border-[#090D16] shadow-[0_2px_0_#090D16]"
+            aria-label={`Habilidad principal automática ${hud.apexFusionAutoName ?? primarySp.name}`}
+            title={`Principal (Auto-Disparo): ${hud.apexFusionAutoName ?? primarySp.name}`}
+            className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#0B1422]/88 border shadow-[0_2px_0_#090D16] ${
+              hud.isSuperSaiyanFusion ? 'border-amber-400/80' : 'border-[#090D16]'
+            }`}
           >
             <SpeciesEmblem
               speciesId={hud.primarySpecies}
-              color={primarySp.accentColor}
+              color={hud.isSuperSaiyanFusion ? '#FACC15' : primarySp.accentColor}
               unlocked={true}
               size={15}
             />
             <div className="leading-none">
-              <div className="text-[8px] font-bold uppercase tracking-wider text-emerald-400">
-                Auto
+              <div className={`text-[8px] font-bold uppercase tracking-wider ${hud.isSuperSaiyanFusion ? 'text-amber-300' : 'text-emerald-400'}`}>
+                {hud.isSuperSaiyanFusion ? 'SSJ Auto' : 'Auto'}
               </div>
               <div className="text-[11px] font-display font-bold text-white whitespace-nowrap">
-                {primarySp.name}
+                {hud.apexFusionAutoName ?? primarySp.name}
               </div>
             </div>
           </div>
@@ -678,27 +682,31 @@ export function GameHud({
                 : 'bg-[#0B1422]/88 text-slate-400 cursor-not-allowed'
             }`}
             style={{
-              borderColor: secondaryReady ? secondarySp.accentColor : '#090D16',
+              borderColor: secondaryReady
+                ? hud.isSuperSaiyanFusion
+                  ? '#FACC15'
+                  : secondarySp.accentColor
+                : '#090D16',
             }}
           >
             <span
               aria-hidden="true"
               className="absolute inset-0 origin-left opacity-30"
               style={{
-                backgroundColor: secondarySp.accentColor,
+                backgroundColor: hud.isSuperSaiyanFusion ? '#FACC15' : secondarySp.accentColor,
                 transform: `scaleX(${hud.secondaryCharge})`,
               }}
             />
             <SpeciesEmblem
               speciesId={hud.secondarySpecies}
-              color={secondarySp.accentColor}
+              color={hud.isSuperSaiyanFusion ? '#FACC15' : secondarySp.accentColor}
               unlocked={true}
               size={16}
             />
             <div className="relative z-10 leading-none">
               <div className="flex items-center gap-1 text-[8px] font-bold uppercase tracking-wider text-amber-300">
                 <Crosshair className="w-2.5 h-2.5" />
-                <span>Secundaria</span>
+                <span>{hud.isSuperSaiyanFusion ? 'SSJ Manual' : 'Secundaria'}</span>
                 {!showTouchThumbDock && (
                   <span
                     className={`px-1 py-0.5 rounded font-mono text-[9px] font-black leading-none ${

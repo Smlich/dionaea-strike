@@ -22,15 +22,22 @@ import {
 import {
   advanceMutagenPodByShot,
   applyMutagenPickup,
+  applyPalitoHeartCharm,
+  BOSS_BASE_HP,
+  BOSS_MECHANICS_BY_LEVEL,
+  buildApexFusionPrimaryPattern,
+  buildApexFusionSecondaryPattern,
   buildFusedShotPattern,
   buildPrimaryShotPattern,
   buildSecondaryShotPattern,
   calculateKillScore,
+  CARPINCHO_FACON_RANGE,
   checkCircleCollision,
   checkComboMilestoneCrossed,
   clampAudioVolume,
   computeBeatSnapshot,
   computeBeatSpawnEvents,
+  computeBossScaledMaxHp,
   computeEnemyBulletSpeedMult,
   computeFusedLoadout,
   computeGamepadEdges,
@@ -39,11 +46,13 @@ import {
   computeLogicalViewport,
   computeRelativeTouchTarget,
   getAllowedMutagenSpecies,
+  getApexFusionMeta,
   getComboMultiplier,
   getComboRank,
   getControlPrompts,
   getPetSpecialProfile,
   isPetUnlocked,
+  PALITO_CHARM_HITS_REQUIRED,
   parseGamepadInput,
   pickFrogTongueTarget,
   resolveAbilitySlots,
@@ -259,7 +268,7 @@ test('enemies scale stronger per level and modifier wave drops are sparse', () =
   const waveDrops = DEFAULT_GAME_CONFIG.waves.filter((w) => w.dropsMutagen).length;
   assert.ok(waveDrops <= 5, 'At most half of waves guarantee a mutagen modifier pod');
   assert.ok(DEFAULT_GAME_CONFIG.enemies.tank.hp >= 120);
-  assert.ok(DEFAULT_GAME_CONFIG.bosses[0].maxHp >= 1200);
+  assert.equal(DEFAULT_GAME_CONFIG.bosses[0].maxHp, computeBossScaledMaxHp(BOSS_BASE_HP[1], 1));
 });
 
 test('frog ally follows side-scroller wingman offset and prioritizes nearby enemy projectiles', () => {
@@ -346,7 +355,7 @@ test('all menu and 5 level music tracks resolve appropriately', () => {
   assert.equal(LEVEL_2_MUSIC_SRC, '/assets/aistudio/Dionaea_Strike_-_Nivel_2_Cumbia_Villera.m4a');
   assert.equal(getMusicTrackForState('playing', 3), LEVEL_3_MUSIC_SRC);
   assert.equal(getMusicTrackForState('playing', 4), LEVEL_4_MUSIC_SRC);
-  assert.equal(LEVEL_4_MUSIC_SRC, '/assets/aistudio/Dionaea_Strike_-_level_4_1399cdc6.m4a');
+  assert.equal(LEVEL_4_MUSIC_SRC, '/assets/aistudio/Dionaea_Strike_-_Nivel_4_Cuarteto.m4a');
   assert.notEqual(LEVEL_4_MUSIC_SRC, LEVEL_1_MUSIC_SRC);
   assert.equal(getMusicTrackForState('playing', 5), LEVEL_5_MUSIC_SRC);
 
@@ -757,6 +766,98 @@ test('shouldRequireLandscape enforces landscape on portrait phones/tablets and r
   assert.equal(Math.round(moved.x), 280);
   assert.equal(Math.round(moved.y), 288);
 });
+
+test('Palito slow-charming hearts, Carpincho extended facón range, slower base attack, Dual Lv.4 Super Saiyan Fusion & 5 Xeno Bosses', () => {
+  // 1. Palito slow-charming heart buildup
+  const heartVictim: SimEnemyState = {
+    id: 91,
+    archetype: 'drone',
+    x: 700,
+    y: 350,
+    vx: -140,
+    vy: 0,
+    hp: 100,
+    maxHp: 100,
+    radius: 19,
+    age: 0.5,
+    phaseOffset: 0,
+    fireTimer: 1,
+    windupTimer: 0,
+    windupDuration: 0,
+    aimX: 0,
+    aimY: 0,
+    lungeState: 'track',
+    lungeTimer: 0,
+    shieldActive: false,
+    slowTimer: 0,
+    slowFactor: 0,
+    mucilageHits: 0,
+    rootedTimer: 0,
+    acidTimer: 0,
+    acidDps: 0,
+    hitFlashTimer: 0,
+    koTimer: 0,
+    dying: false,
+    orbitCenterX: 700,
+    orbitCenterY: 350,
+  };
+  for (let hit = 1; hit < PALITO_CHARM_HITS_REQUIRED; hit++) {
+    const partial = applyPalitoHeartCharm(heartVictim);
+    assert.equal(partial.charmed, false, `Hit ${hit} builds love slowly without instant full charm`);
+    assert.ok(heartVictim.slowTimer > 0 && heartVictim.slowFactor > 0.2);
+  }
+  const fullCharm = applyPalitoHeartCharm(heartVictim);
+  assert.equal(fullCharm.charmed, true, 'Reaching threshold charms enemy completely');
+  assert.ok((heartVictim.charmedTimer ?? 0) > 2.5);
+
+  // 2. Carpincho facón expanded melee range
+  assert.ok(CARPINCHO_FACON_RANGE >= 240, 'Carpincho facón melee range is substantially increased');
+
+  // 3. Slower initial attack speed at Lv.1
+  assert.ok(DEFAULT_GAME_CONFIG.player.baseFireInterval >= 0.25, 'Initial base attack interval is slower');
+  const lv1Loadout = computeFusedLoadout(makeLevels({ dionaea: 1 }), DEFAULT_GAME_CONFIG);
+  assert.equal(lv1Loadout.isSuperSaiyanFusion, false);
+  assert.ok(lv1Loadout.fireInterval >= 0.25);
+
+  // 4. Dual Max-Level (Lv.4 + Lv.4) Apex Fusion + Super Saiyan mode (auto + manual triggers!)
+  const apexLevels = makeLevels({ dionaea: 4, nepenthes: 4 });
+  const apexLoadout = computeFusedLoadout(apexLevels, DEFAULT_GAME_CONFIG);
+  assert.equal(apexLoadout.isSuperSaiyanFusion, true);
+  assert.deepEqual(apexLoadout.fusedPair, ['dionaea', 'nepenthes']);
+
+  const meta = getApexFusionMeta('dionaea', 'nepenthes', DEFAULT_GAME_CONFIG);
+  assert.ok(meta.autoName.length > 0 && meta.manualName.length > 0);
+
+  const autoShots = buildApexFusionPrimaryPattern('dionaea', 'nepenthes', apexLevels, 3, DEFAULT_GAME_CONFIG);
+  assert.ok(autoShots.length >= 3);
+  assert.equal(autoShots[0].kind, 'apex_fusion_auto');
+  assert.ok(autoShots.some((s) => s.acidDps > 0 && s.armorPierce), 'Auto shot fuses acid + armor pierce traits');
+
+  const manualShots = buildApexFusionSecondaryPattern('dionaea', 'nepenthes', apexLevels, DEFAULT_GAME_CONFIG);
+  assert.ok(manualShots.length >= 3);
+  assert.equal(manualShots[0].kind, 'apex_fusion_manual');
+  assert.equal(manualShots[0].isSecondary, true);
+  assert.ok(manualShots[0].clearsEnemyBullets && manualShots[0].acidDps > 0, 'Manual shot fuses both Ult traits');
+
+  // 5. Customized Horror+Anime+Xenomorph Bosses: exact x mechanics and HP * x/2 scaling
+  const expectedBossNames = ['TRILOBITES', 'MARIQUITA', 'AVISPA', 'MANTIS', 'ESCORPIÓN'] as const;
+  for (const lv of [1, 2, 3, 4, 5] as const) {
+    const cfg = DEFAULT_GAME_CONFIG.bosses[lv - 1];
+    assert.ok(cfg.name.includes(expectedBossNames[lv - 1]), `Level ${lv} boss is ${expectedBossNames[lv - 1]}`);
+    assert.equal(cfg.maxHp, computeBossScaledMaxHp(BOSS_BASE_HP[lv], lv), `Level ${lv} boss HP uses x/2 multiplier`);
+    assert.equal(BOSS_MECHANICS_BY_LEVEL[lv].length, lv, `Level ${lv} boss defines exact ${lv} mechanics`);
+    if (lv > 1) {
+      const prev = DEFAULT_GAME_CONFIG.bosses[lv - 2];
+      assert.ok(cfg.maxHp > prev.maxHp && cfg.speed > prev.speed && cfg.fireInterval < prev.fireInterval);
+    }
+  }
+
+  // 6. Headless-safe celebratory anime theme & transform SFX hooks
+  soundEngine.playBossClearAnimeTheme();
+  soundEngine.playPortalOpen();
+  soundEngine.playSuperSaiyanTransform();
+});
+
 
 
 

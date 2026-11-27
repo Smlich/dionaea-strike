@@ -2,9 +2,13 @@ import { getLevelRhythmProfile, soundEngine } from './audio';
 import {
   advanceMutagenPodByShot,
   applyMutagenPickup,
+  applyPalitoHeartCharm,
+  buildApexFusionPrimaryPattern,
+  buildApexFusionSecondaryPattern,
   buildPrimaryShotPattern,
   buildSecondaryShotPattern,
   calculateKillScore,
+  CARPINCHO_FACON_RANGE,
   checkCircleCollision,
   checkComboMilestoneCrossed,
   COMBO_WINDOW_SEC,
@@ -15,6 +19,7 @@ import {
   computeInvasionState,
   computeLevelEnemyStats,
   getAllowedMutagenSpecies,
+  getApexFusionMeta,
   getComboMultiplier,
   getComboRank,
   getPetSpecialProfile,
@@ -60,16 +65,26 @@ import type {
   ClearedLevelSummary,
   ComboMilestoneAnnouncement,
   EnemyArchetypeId,
+  FusedLoadout,
   GameConfig,
   GameStatus,
   HudSnapshot,
   LandscapeId,
   LevelNumber,
   PetId,
+  PortalSequenceState,
   ProjectileDescriptor,
   SpeciesId,
   SpeciesLevels,
 } from './types';
+
+const LEVEL_LANDSCAPES: Record<LevelNumber, LandscapeId> = {
+  1: 'pampa_dawn',
+  2: 'jungle_falls',
+  3: 'city_night',
+  4: 'urban_viaduct',
+  5: 'humahuaca_andes',
+};
 
 function createInitialSpeciesLevels(): SpeciesLevels {
   return {
@@ -131,8 +146,14 @@ export class GameSimulation {
   private invasionAlertLabel: string | null = null;
   private prevInvasionStage = 0;
 
-  // Progression, Levels, Unlocks, Pets & Landscapes
+  // Progression, Levels, Unlocks, Pets, Portals & Landscapes
   private speciesLevels: SpeciesLevels = createInitialSpeciesLevels();
+  private cachedLoadout: FusedLoadout | null = null;
+  private superSaiyanAnnounced = false;
+  private portal: PortalSequenceState | null = null;
+  private pendingBossClearResult: 'level_clear' | 'victory' | null = null;
+  private portalOriginX = 160;
+  private portalOriginY = 360;
   private unlockedSpecies: SpeciesId[] = loadUnlockedSpecies();
   private unlockedPets: PetId[] = loadUnlockedPets();
   private selectedPet: PetId = loadSelectedPet();
@@ -355,8 +376,16 @@ export class GameSimulation {
     };
   }
 
+  private getLoadout(): FusedLoadout {
+    if (!this.cachedLoadout) {
+      this.cachedLoadout = computeFusedLoadout(this.speciesLevels, this.config);
+    }
+    return this.cachedLoadout;
+  }
+
   public setConfig(config: GameConfig) {
     this.config = config;
+    this.cachedLoadout = null;
     this.maxHp = config.player.maxHp;
     this.hp = Math.min(this.hp, this.maxHp);
     this.emitHud();
@@ -513,10 +542,36 @@ export class GameSimulation {
     this.invasionAlertLabel = null;
     this.prevInvasionStage = 0;
     this.secondaryCooldown = 0;
-    this.playerInvulnTimer = Math.max(this.playerInvulnTimer, 1.0);
+    this.playerInvulnTimer = Math.max(this.playerInvulnTimer, 1.35);
+
+    // Start Levels 2-5 with protagonist emerging from a dimensional portal linked to the previous stage!
+    const prevLv = Math.max(1, this.levelIndex - 1) as LevelNumber;
+    const entryX = Math.min(130, this.width * 0.14);
+    const entryY = this.height * 0.5;
+    this.playerX = entryX - 28;
+    this.playerY = entryY;
+    this.playerScaleX = 0.28;
+    this.playerScaleY = 0.28;
+    this.frog.x = this.playerX - 24;
+    this.frog.y = this.playerY - 18;
+    this.portalOriginX = entryX;
+    this.portalOriginY = entryY;
+    this.portal = {
+      phase: 'exiting',
+      x: entryX,
+      y: entryY,
+      radius: 76,
+      maxRadius: 76,
+      progress: 0,
+      duration: 1.2,
+      textureTarget: LEVEL_LANDSCAPES[prevLv],
+      label: `SALIDA · NIVEL ${prevLv} → ${this.levelIndex}`,
+    };
+    soundEngine.playPortalOpen();
+
     this.banner = {
       title: `NIVEL ${this.levelIndex} · ${nextWave?.title ?? 'NUEVO SECTOR'}`,
-      detail: '¡Nueva oleada de la corona al ritmo del nivel!',
+      detail: '¡Emergiendo del portal dimensional al ritmo del sector!',
       accentColor: '#38BDF8',
       ttl: 2.8,
     };
@@ -526,6 +581,10 @@ export class GameSimulation {
   public resetRunState() {
     this.hitstopTimer = 0;
     this.trauma = 0;
+    this.cachedLoadout = null;
+    this.superSaiyanAnnounced = false;
+    this.portal = null;
+    this.pendingBossClearResult = null;
     this.playerX = Math.min(190, this.width * 0.16);
     this.playerY = this.height * 0.5;
     this.playerVx = 0;
@@ -687,22 +746,34 @@ export class GameSimulation {
   }
 
   public fireSecondaryAbility() {
-    if (this.status !== 'playing' || this.secondaryCooldown > 0) return;
+    if (this.status !== 'playing' || this.portal || this.secondaryCooldown > 0) return;
 
     const slots = resolveAbilitySlots(this.speciesLevels, this.primarySpecies, this.secondarySpecies);
     this.primarySpecies = slots.primary;
     this.secondarySpecies = slots.secondary;
 
+    const loadout = this.getLoadout();
+    const isApexFusion = loadout.isSuperSaiyanFusion && loadout.fusedPair !== null;
+    const apexMeta = isApexFusion && loadout.fusedPair
+      ? getApexFusionMeta(loadout.fusedPair[0], loadout.fusedPair[1], this.config)
+      : null;
+
     const meta = SECONDARY_ABILITY_META[this.secondarySpecies];
-    const secShots = buildSecondaryShotPattern(this.secondarySpecies, this.speciesLevels, this.config);
+    const secShots = isApexFusion && loadout.fusedPair
+      ? buildApexFusionSecondaryPattern(loadout.fusedPair[0], loadout.fusedPair[1], this.speciesLevels, this.config)
+      : buildSecondaryShotPattern(this.secondarySpecies, this.speciesLevels, this.config);
     if (secShots.length === 0) return;
 
     for (const desc of secShots) {
       this.spawnPlayerBullet(desc, this.playerX + desc.offsetX, this.playerY + desc.offsetY);
     }
 
-    this.secondaryMaxCooldown = meta.cooldownSec;
-    this.secondaryCooldown = meta.cooldownSec;
+    const cd = apexMeta ? apexMeta.cooldownSec : meta.cooldownSec;
+    const calloutName = apexMeta ? apexMeta.manualName : meta.name;
+    const spColor = apexMeta ? '#FACC15' : this.config.species[this.secondarySpecies].accentColor;
+
+    this.secondaryMaxCooldown = cd;
+    this.secondaryCooldown = cd;
     this.heroJawChompTimer = 0.28;
     this.heroRecoil = 1;
     this.playerScaleX = 0.88;
@@ -710,13 +781,12 @@ export class GameSimulation {
     this.trauma = Math.min(1, this.trauma + 0.24);
     soundEngine.playSecondaryFire(this.secondarySpecies);
 
-    const spColor = this.config.species[this.secondarySpecies].accentColor;
-    this.spawnBurst(this.playerX + 34, this.playerY, spColor, 10, 175, true);
+    this.spawnBurst(this.playerX + 34, this.playerY, spColor, isApexFusion ? 16 : 10, 185, true);
     this.callouts.push({
       x: this.playerX + 26,
       y: this.playerY - 28,
       vy: -36,
-      text: `⚡ ${meta.name.toUpperCase()}!`,
+      text: `⚡ ${calloutName.toUpperCase()}!`,
       color: spColor,
       life: 0.9,
       maxLife: 0.9,
@@ -761,8 +831,8 @@ export class GameSimulation {
   }
 
   public triggerSpecialPulse() {
-    if (this.status !== 'playing' || this.specialCooldown > 0) return;
-    const loadout = computeFusedLoadout(this.speciesLevels, this.config);
+    if (this.status !== 'playing' || this.portal || this.specialCooldown > 0) return;
+    const loadout = this.getLoadout();
     const uLv = loadout.utriculariaLevel;
     const profile = getPetSpecialProfile(this.selectedPet, loadout.specialPower, uLv);
 
@@ -1147,6 +1217,19 @@ export class GameSimulation {
       if (this.banner.ttl <= 0) this.banner = null;
     }
 
+    if (this.portal) {
+      this.updatePortalSequence(dt);
+      this.updatePlayerBullets(dt);
+      this.updateParticles(dt);
+      this.updateCallouts(dt);
+      this.hudAccumulator += dt;
+      if (this.hudAccumulator >= 0.08) {
+        this.hudAccumulator = 0;
+        this.emitHud();
+      }
+      return;
+    }
+
     this.updatePlayer(dt);
     this.updatePetCompanion(dt);
     this.updateMafiaCats(dt);
@@ -1167,6 +1250,97 @@ export class GameSimulation {
     if (this.hudAccumulator >= 0.08) {
       this.hudAccumulator = 0;
       this.emitHud();
+    }
+  }
+
+  private updatePortalSequence(dt: number) {
+    const p = this.portal;
+    if (!p) return;
+
+    p.progress = Math.min(1, p.progress + dt / Math.max(0.1, p.duration));
+    this.playerInvulnTimer = Math.max(this.playerInvulnTimer, 0.4);
+
+    if (p.phase === 'forming') {
+      // Swirling boss-defeat particles condense inward into the swirling dimensional rift!
+      p.radius = p.maxRadius * (0.18 + 0.82 * Math.sin(p.progress * Math.PI * 0.5));
+      for (const pt of this.particles) {
+        if (!pt.active) continue;
+        const dx = p.x - pt.x;
+        const dy = p.y - pt.y;
+        const dist = Math.max(12, Math.hypot(dx, dy));
+        const nx = dx / dist;
+        const ny = dy / dist;
+        // Swirl tangential + inward pull
+        pt.vx = pt.vx * 0.88 + (nx * 360 - ny * 210) * dt * 6;
+        pt.vy = pt.vy * 0.88 + (ny * 360 + nx * 210) * dt * 6;
+      }
+      if (p.progress >= 1) {
+        p.phase = 'entering';
+        p.progress = 0;
+        p.duration = 1.65;
+        p.radius = p.maxRadius;
+        this.portalOriginX = this.playerX;
+        this.portalOriginY = this.playerY;
+      }
+      return;
+    }
+
+    if (p.phase === 'entering') {
+      const ease = p.progress * p.progress * (3 - 2 * p.progress);
+      this.playerX = this.portalOriginX + (p.x - this.portalOriginX) * ease;
+      this.playerY = this.portalOriginY + (p.y - this.portalOriginY) * ease;
+      this.playerVx = (p.x - this.portalOriginX) * 0.6;
+      this.playerVy = (p.y - this.portalOriginY) * 0.6;
+      this.heroBankAngle = Math.max(-1, Math.min(1, (p.y - this.portalOriginY) / 220));
+      const scaleFade = Math.max(0.08, 1 - Math.max(0, (p.progress - 0.58) / 0.42) * 0.92);
+      this.playerScaleX = scaleFade;
+      this.playerScaleY = scaleFade;
+      this.frog.x += (this.playerX - 28 * scaleFade - this.frog.x) * Math.min(1, dt * 10);
+      this.frog.y += (this.playerY - 22 * scaleFade - this.frog.y) * Math.min(1, dt * 10);
+
+      if (Math.random() < 0.45) {
+        this.spawnBurst(p.x + (Math.random() - 0.5) * 40, p.y + (Math.random() - 0.5) * 40, '#38BDF8', 2, 110, false);
+      }
+
+      if (p.progress >= 1) {
+        this.playerScaleX = 1;
+        this.playerScaleY = 1;
+        this.portal = null;
+        const result = this.pendingBossClearResult ?? 'level_clear';
+        this.pendingBossClearResult = null;
+        if (result === 'level_clear') {
+          this.clearInputs();
+          this.setStatus('level_clear');
+        } else {
+          this.finalizeRunRecord(true);
+          soundEngine.playVictory();
+          this.setStatus('victory');
+        }
+      }
+      return;
+    }
+
+    // phase === 'exiting' (Levels 2-5 start: hero emerges out of the rift linked to the prior world!)
+    const targetX = Math.min(195, this.width * 0.19);
+    const targetY = this.height * 0.5;
+    const easeOut = 1 - Math.pow(1 - p.progress, 3);
+    this.playerX = p.x - 24 + (targetX - (p.x - 24)) * easeOut;
+    this.playerY = p.y + (targetY - p.y) * easeOut;
+    const emergeScale = Math.min(1, 0.25 + easeOut * 0.75);
+    this.playerScaleX = emergeScale;
+    this.playerScaleY = emergeScale;
+    this.frog.x += (this.playerX - 58 - this.frog.x) * Math.min(1, dt * 10);
+    this.frog.y += (this.playerY - 48 - this.frog.y) * Math.min(1, dt * 10);
+
+    if (p.progress > 0.65) {
+      p.radius = p.maxRadius * Math.max(0, 1 - (p.progress - 0.65) / 0.35);
+    }
+
+    if (p.progress >= 1) {
+      this.playerScaleX = 1;
+      this.playerScaleY = 1;
+      this.portal = null;
+      this.spawnBurst(this.playerX, this.playerY, '#38BDF8', 16, 195, true);
     }
   }
 
@@ -1229,15 +1403,24 @@ export class GameSimulation {
       this.primarySpecies = slots.primary;
       this.secondarySpecies = slots.secondary;
 
-      const loadout = computeFusedLoadout(this.speciesLevels, this.config);
+      const loadout = this.getLoadout();
       this.fireCooldown = loadout.fireInterval;
       this.shotIndex++;
-      const pattern = buildPrimaryShotPattern(
-        this.primarySpecies,
-        this.speciesLevels,
-        this.shotIndex,
-        this.config
-      );
+      const isApexFusion = loadout.isSuperSaiyanFusion && loadout.fusedPair !== null;
+      const pattern = isApexFusion && loadout.fusedPair
+        ? buildApexFusionPrimaryPattern(
+            loadout.fusedPair[0],
+            loadout.fusedPair[1],
+            this.speciesLevels,
+            this.shotIndex,
+            this.config
+          )
+        : buildPrimaryShotPattern(
+            this.primarySpecies,
+            this.speciesLevels,
+            this.shotIndex,
+            this.config
+          );
       for (const desc of pattern) {
         this.spawnPlayerBullet(desc, this.playerX + desc.offsetX, this.playerY + desc.offsetY);
       }
@@ -1354,23 +1537,23 @@ export class GameSimulation {
           this.frog.y - 2
         );
       } else if (pet === 'palito') {
-        // Palito fires golden calming orbs
-        this.frog.bubbleTimer = 0.42;
+        // Palito dispara corazones que enamoran a sus enemigos lentamente
+        this.frog.bubbleTimer = 0.56;
         this.spawnPlayerBullet(
           {
-            kind: 'frog_bubble',
-            offsetX: 16,
+            kind: 'palito_heart',
+            offsetX: 18,
             offsetY: -2,
-            vx: 610,
-            vy: 0,
+            vx: 430,
+            vy: -4,
             gravity: 0,
-            drag: 0.996,
+            drag: 0.997,
             bounces: 0,
-            damage: Math.round(this.config.player.frogAlly.bubbleDamage * 1.08),
-            radius: 6.0,
-            color: '#FACC15',
-            glowColor: '#F472B6',
-            slowFactor: 0.22,
+            damage: Math.round(this.config.player.frogAlly.bubbleDamage * 0.95),
+            radius: 7.4,
+            color: '#F472B6',
+            glowColor: '#FEF08A',
+            slowFactor: 0.24,
             acidDps: 0,
             acidRadius: 0,
             armorPierce: false,
@@ -1379,38 +1562,12 @@ export class GameSimulation {
             spawnsVortex: false,
             piercing: false,
           },
-          this.frog.x + 16,
+          this.frog.x + 18,
           this.frog.y - 2
         );
       } else if (pet === 'carpincho') {
-        // Carpincho Matero splashes scalding yerba-mate drops
-        this.frog.bubbleTimer = 0.4;
-        this.spawnPlayerBullet(
-          {
-            kind: 'mate_shot',
-            offsetX: 16,
-            offsetY: 2,
-            vx: 620,
-            vy: -36,
-            gravity: 210,
-            drag: 0.996,
-            bounces: 0,
-            damage: Math.round(this.config.player.frogAlly.bubbleDamage * 1.2),
-            radius: 6.4,
-            color: '#22C55E',
-            glowColor: '#DCFCE7',
-            slowFactor: 0.28,
-            acidDps: 0,
-            acidRadius: 0,
-            armorPierce: true,
-            chainAcid: false,
-            pullStrength: 0,
-            spawnsVortex: false,
-            piercing: false,
-          },
-          this.frog.x + 16,
-          this.frog.y + 2
-        );
+        // Carpincho Matero NO lanza proyectiles: solo protege con su poncho y pelea cuerpo a cuerpo con facón
+        this.frog.bubbleTimer = 0.5;
       } else {
         // Sapo Batricio fires buoyant dew bubbles
         this.frog.bubbleTimer = 0.44;
@@ -1629,17 +1786,27 @@ export class GameSimulation {
             maxLife: 0.8,
           });
         } else {
-          // Faconazos on nearby enemies!
+          // Faconazos de largo alcance sobre enemigos cercanos (sin disparos)
           let slashed = false;
           for (const en of this.enemies) {
-            if (!en.dying && checkCircleCollision(this.frog.x + 22, this.frog.y, 165, en.x, en.y, en.radius)) {
-              en.hp -= this.config.player.frogAlly.bubbleDamage * 3.1;
+            if (!en.dying && checkCircleCollision(this.frog.x + 28, this.frog.y, CARPINCHO_FACON_RANGE, en.x, en.y, en.radius)) {
+              en.hp -= this.config.player.frogAlly.bubbleDamage * 3.3;
               en.hitFlashTimer = 0.08;
-              en.slowTimer = Math.max(en.slowTimer, 1.2);
-              en.slowFactor = Math.max(en.slowFactor, 0.38);
+              en.slowTimer = Math.max(en.slowTimer, 1.3);
+              en.slowFactor = Math.max(en.slowFactor, 0.4);
               this.spawnBurst(en.x, en.y, '#F8FAFC', 9, 175, true);
               slashed = true;
             }
+          }
+          if (
+            this.boss.active &&
+            this.boss.dyingTimer <= 0 &&
+            checkCircleCollision(this.frog.x + 28, this.frog.y, CARPINCHO_FACON_RANGE, this.boss.x, this.boss.y, this.boss.radius)
+          ) {
+            this.boss.hp -= this.config.player.frogAlly.bubbleDamage * 2.8;
+            this.boss.hitFlashTimer = 0.06;
+            this.spawnBurst(this.boss.x - 24, this.boss.y, '#F8FAFC', 7, 160, true);
+            slashed = true;
           }
           if (slashed) {
             this.frog.tongueCooldown = this.config.player.frogAlly.tongueCooldownSec * 0.8;
@@ -2226,6 +2393,12 @@ export class GameSimulation {
         const prevActiveCount = Object.values(this.speciesLevels).filter((lv) => lv > 0).length;
         const res = applyMutagenPickup(this.speciesLevels, chosenId, this.config, this.unlockedSpecies);
         this.speciesLevels = res.nextLevels;
+        this.cachedLoadout = null;
+        const loadoutAfterPickup = this.getLoadout();
+        const isFreshSuperSaiyan =
+          loadoutAfterPickup.isSuperSaiyanFusion &&
+          loadoutAfterPickup.fusedPair !== null &&
+          !this.superSaiyanAnnounced;
         const newActiveCount = Object.values(this.speciesLevels).filter((lv) => lv > 0).length;
 
         // If a 2nd species was newly unlocked, assign it immediately to Secondary slot so player can fire & rotate!
@@ -2239,28 +2412,52 @@ export class GameSimulation {
           this.secondarySpecies = slots.secondary;
         }
 
-        this.hitstopTimer = res.unlockedSecret ? 0.095 : 0.055;
-        this.trauma = Math.min(1, this.trauma + (res.unlockedSecret ? 0.55 : 0.32));
-        this.playerScaleX = res.unlockedSecret ? 1.35 : 1.24;
-        this.playerScaleY = res.unlockedSecret ? 0.76 : 0.82;
+        const bigBurst = res.unlockedSecret || isFreshSuperSaiyan;
+        this.hitstopTimer = bigBurst ? 0.095 : 0.055;
+        this.trauma = Math.min(1, this.trauma + (bigBurst ? 0.58 : 0.32));
+        this.playerScaleX = bigBurst ? 1.35 : 1.24;
+        this.playerScaleY = bigBurst ? 0.76 : 0.82;
         this.spawnBurst(
           this.playerX,
           this.playerY,
-          res.unlockedSecret ? '#FACC15' : sp.accentColor,
-          res.unlockedSecret ? 36 : 22,
-          res.unlockedSecret ? 290 : 240,
+          bigBurst ? '#FACC15' : sp.accentColor,
+          bigBurst ? 38 : 22,
+          bigBurst ? 300 : 240,
           true
         );
-        soundEngine.playFusionFanfare();
+        if (isFreshSuperSaiyan && loadoutAfterPickup.fusedPair) {
+          this.superSaiyanAnnounced = true;
+          const apexMeta = getApexFusionMeta(
+            loadoutAfterPickup.fusedPair[0],
+            loadoutAfterPickup.fusedPair[1],
+            this.config
+          );
+          this.secondaryMaxCooldown = apexMeta.cooldownSec;
+          this.secondaryCooldown = 0;
+          this.spawnBurst(this.frog.x, this.frog.y, '#FACC15', 22, 220, true);
+          soundEngine.playSuperSaiyanTransform();
+          this.score += 900;
+          this.hp = Math.min(this.maxHp, this.hp + 1);
+          this.banner = {
+            title: `¡MODO SUPER SAIYAJIN · ${apexMeta.title}!`,
+            detail: `Auto: ${apexMeta.autoName} · Manual [E]: ${apexMeta.manualName}`,
+            accentColor: '#FACC15',
+            ttl: 4.0,
+          };
+        } else {
+          soundEngine.playFusionFanfare();
+        }
 
-        const clearRadius = res.unlockedSecret ? 9999 : 175;
+        const clearRadius = bigBurst ? 9999 : 175;
         for (const eb of this.enemyBullets) {
           if (eb.active && checkCircleCollision(this.playerX, this.playerY, clearRadius, eb.x, eb.y, eb.radius)) {
             eb.active = false;
           }
         }
 
-        if (res.unlockedSecret) {
+        if (isFreshSuperSaiyan) {
+          // Super Saiyan banner already set above!
+        } else if (res.unlockedSecret) {
           this.score += 750;
           this.hp = Math.min(this.maxHp, this.hp + 2);
           this.banner = {
@@ -2440,7 +2637,7 @@ export class GameSimulation {
   }
 
   private updatePlayerBullets(dt: number) {
-    const loadout = computeFusedLoadout(this.speciesLevels, this.config);
+    const loadout = this.getLoadout();
 
     for (const b of this.playerBullets) {
       if (!b.active) continue;
@@ -2526,7 +2723,7 @@ export class GameSimulation {
       }
 
       // Shooting a Mutagen Pod cycles to the next evolution so players can aim for desired upgrades!
-      if (b.kind !== 'frog_bubble' && !b.isSecondary && this.pickups.length > 0) {
+      if (b.kind !== 'frog_bubble' && b.kind !== 'palito_heart' && !b.isSecondary && this.pickups.length > 0) {
         let shiftedPod = false;
         for (const p of this.pickups) {
           if (checkCircleCollision(b.x, b.y, b.radius, p.x, p.y, 24)) {
@@ -2597,6 +2794,22 @@ export class GameSimulation {
                 other.slowFactor = Math.max(other.slowFactor, 0.55);
                 other.slowTimer = Math.max(other.slowTimer, 2.4);
               }
+            }
+          }
+
+          if (b.kind === 'palito_heart') {
+            const charmRes = applyPalitoHeartCharm(e);
+            this.spawnBurst(e.x, e.y, '#F472B6', charmRes.charmed ? 9 : 4, 125, charmRes.charmed);
+            if (charmRes.charmed) {
+              this.callouts.push({
+                x: e.x,
+                y: e.y - 22,
+                vy: -28,
+                text: '♥ ENAMORADO',
+                color: '#F472B6',
+                life: 0.9,
+                maxLife: 0.9,
+              });
             }
           }
 
@@ -2715,8 +2928,12 @@ export class GameSimulation {
   }
 
   private updateEnemies(dt: number) {
-    const loadout = computeFusedLoadout(this.speciesLevels, this.config);
-    const activeAttackers = this.enemies.filter((e) => !e.dying && e.windupTimer > 0).length;
+    const loadout = this.getLoadout();
+    let activeAttackers = 0;
+    for (let k = 0; k < this.enemies.length; k++) {
+      const en = this.enemies[k];
+      if (!en.dying && en.windupTimer > 0) activeAttackers++;
+    }
     const maxAttackers = 4 + Math.floor((this.levelIndex - 1) / 2);
     let tokensLeft = Math.max(0, maxAttackers - activeAttackers);
 
@@ -2947,19 +3164,68 @@ export class GameSimulation {
             this.acidPools = [];
             this.vortexes = [];
             this.pickups = [];
-            this.banner = null;
+            this.windForceX = 0;
+            this.banner = {
+              title: `¡JEFE NV.${b.level} DERROTADO!`,
+              detail: `Portal abierto hacia el Nivel ${nextLevel} — ¡Entrando!`,
+              accentColor: '#38BDF8',
+              ttl: 3.2,
+            };
 
             this.levelIndex = nextLevel;
             this.miniBossDefeatedForLevel = false;
             this.checkLiveHighScoreProgress();
             syncLiveHighScore(Math.round(this.score), this.maxCombo, this.levelIndex);
-            this.clearInputs();
-            soundEngine.playFusionFanfare();
-            this.setStatus('level_clear');
+            soundEngine.stopMusic();
+            soundEngine.playBossClearAnimeTheme();
+            soundEngine.playPortalOpen();
+            this.spawnBurst(b.x, b.y, '#FACC15', 24, 240, true);
+            this.spawnBurst(b.x, b.y, '#38BDF8', 20, 210, true);
+            this.portal = {
+              phase: 'forming',
+              x: Math.min(this.width - 110, Math.max(this.width * 0.62, b.x)),
+              y: Math.min(this.height - 95, Math.max(95, b.y)),
+              radius: 16,
+              maxRadius: 84,
+              progress: 0,
+              duration: 1.55,
+              textureTarget: LEVEL_LANDSCAPES[nextLevel],
+              label: `PORTAL · NIVEL ${nextLevel}`,
+            };
+            this.pendingBossClearResult = 'level_clear';
+            this.emitHud();
           } else {
-            this.finalizeRunRecord(true);
-            soundEngine.playVictory();
-            this.setStatus('victory');
+            for (const eb of this.enemyBullets) eb.active = false;
+            this.enemies = [];
+            this.acidPools = [];
+            this.vortexes = [];
+            this.pickups = [];
+            this.windForceX = 0;
+            this.banner = {
+              title: '¡ESCORPIÓN EMPERADOR DERROTADO!',
+              detail: 'Portal hacia La Reina Nodriza abierto — ¡Próxima actualización!',
+              accentColor: '#F43F5E',
+              ttl: 3.4,
+            };
+            this.checkLiveHighScoreProgress();
+            soundEngine.stopMusic();
+            soundEngine.playBossClearAnimeTheme();
+            soundEngine.playPortalOpen();
+            this.spawnBurst(b.x, b.y, '#F43F5E', 24, 250, true);
+            this.spawnBurst(b.x, b.y, '#FACC15', 22, 220, true);
+            this.portal = {
+              phase: 'forming',
+              x: Math.min(this.width - 110, Math.max(this.width * 0.62, b.x)),
+              y: Math.min(this.height - 95, Math.max(95, b.y)),
+              radius: 18,
+              maxRadius: 92,
+              progress: 0,
+              duration: 1.65,
+              textureTarget: 'queen_mothership',
+              label: 'PORTAL · LA REINA NODRIZA',
+            };
+            this.pendingBossClearResult = 'victory';
+            this.emitHud();
           }
         }
       }
@@ -3009,19 +3275,19 @@ export class GameSimulation {
         b.vy = -Math.abs(b.vy);
       }
 
-      // Level 1 Boss (TABANUS REX): Cycling clockwork brass shield stance
+      // 1) Lv.1 Final Boss TRILOBITES (1 Mecánica): coraza fósil retráctil con escudo cíclico
       if (b.level === 1 && !b.isMiniBoss) {
         b.shieldTimer -= dt;
         if (b.shieldTimer <= 0) {
           b.shieldActive = !b.shieldActive;
-          b.shieldTimer = b.shieldActive ? 2.4 : b.phase === 2 ? 3.4 : 4.2;
+          b.shieldTimer = b.shieldActive ? 2.4 : b.phase === 2 ? 3.2 : 4.0;
           if (b.shieldActive) {
             soundEngine.playShieldClang();
             this.callouts.push({
               x: b.x - 28,
               y: b.y - 46,
               vy: -24,
-              text: '¡ESCUDO DE LATÓN!',
+              text: '¡CORAZA FÓSIL!',
               color: '#38BDF8',
               life: 1.0,
               maxLife: 1.0,
@@ -3030,58 +3296,66 @@ export class GameSimulation {
         }
       }
 
-      // Level 2 Boss (CICADA RÍTMICA): Beat-synced Cumbia downbeat accent burst in Phase 2
-      if (b.level === 2 && !b.isMiniBoss && b.phase === 2) {
+      // 2) Lv.2 MARIQUITA PARÁSITA (2 Mecánicas): apertura de élitros al compás (Fase 1 & 2)
+      if (b.level === 2 && !b.isMiniBoss) {
         const rhythm = getLevelRhythmProfile(2);
         const snap = computeBeatSnapshot(this.levelBeatClockSec, rhythm.bpm, rhythm.firstDropSec);
-        if (snap.isDownbeat && snap.beatIndex >= 0 && snap.beatIndex !== this.lastBossBeatIndex && snap.beatIndex % 8 === 0) {
+        const modBeats = b.phase === 2 ? 8 : 12;
+        if (snap.isDownbeat && snap.beatIndex >= 0 && snap.beatIndex !== this.lastBossBeatIndex && snap.beatIndex % modBeats === 0) {
           this.lastBossBeatIndex = snap.beatIndex;
-          for (const angOff of [-0.28, 0, 0.28]) {
+          const spots = b.phase === 2 ? [-0.38, -0.14, 0.14, 0.38] : [-0.25, 0, 0.25];
+          for (const angOff of spots) {
             const baseAng = Math.PI + angOff;
             this.spawnEnemyBullet(
               b.x - 32,
               b.y,
-              Math.cos(baseAng) * 260,
-              Math.sin(baseAng) * 260,
-              '#34D399',
+              Math.cos(baseAng) * 265,
+              Math.sin(baseAng) * 265,
+              '#FB7185',
               'spore'
             );
           }
         }
       }
 
-      // Level 4 Mini & Boss (ASILUS / EMPUSA): Vertical holographic blink-teleport
+      // 3) Lv.3 AVISPA XENO-REINA (3 Mecánicas): persecución agresiva en Y y embestida depredadora
+      if (b.level === 3 && !b.isMiniBoss && b.phase === 2) {
+        const dy = this.playerY - b.y;
+        b.y += Math.max(-95, Math.min(95, dy * 0.9)) * dt;
+      }
+
+      // 4) Lv.4 MANTIS ESPECTRAL (4 Mecánicas): parpadeo dimensional con siluetas
       if (b.level === 4) {
         b.blinkCooldown -= dt;
         if (b.blinkCooldown <= 0) {
-          b.blinkCooldown = b.phase === 2 ? 2.4 : 3.4;
+          b.blinkCooldown = b.phase === 2 ? 2.2 : 3.2;
           b.blinkGhostX = b.x;
           b.blinkGhostY = b.y;
-          b.blinkGhostTimer = 0.55;
+          b.blinkGhostTimer = 0.6;
           const topLane = b.radius + 78;
           const botLane = this.height - b.radius - 70;
           b.y = b.y > this.height * 0.5 ? topLane + Math.random() * 90 : botLane - Math.random() * 90;
-          this.spawnBurst(b.blinkGhostX, b.blinkGhostY, '#E879F9', 10, 175, false);
-          this.spawnBurst(b.x, b.y, '#38BDF8', 10, 185, true);
+          this.spawnBurst(b.blinkGhostX, b.blinkGhostY, '#E879F9', 12, 185, false);
+          this.spawnBurst(b.x, b.y, '#22D3EE', 12, 195, true);
         }
       }
 
-      // Level 5 Mini & Boss (CÓNDOR-TÁBANO / BEELZEBOT): Andean wind gusts pushing leftward
+      // 5) Lv.5 ESCORPIÓN EMPERADOR (5 Mecánicas): ráfaga de viento andino + aguijón supremo
       if (b.level === 5) {
         if (b.windActiveTimer > 0) {
           b.windActiveTimer = Math.max(0, b.windActiveTimer - dt);
-          this.windForceX = b.phase === 2 ? -132 : -105;
+          this.windForceX = b.phase === 2 ? -142 : -112;
         } else {
           b.windCooldown -= dt;
           if (b.windCooldown <= 0) {
             b.windActiveTimer = 2.6;
-            b.windCooldown = b.phase === 2 ? 3.2 : 4.4;
+            b.windCooldown = b.phase === 2 ? 3.1 : 4.2;
             soundEngine.playWindGust();
             this.callouts.push({
               x: b.x - 30,
               y: b.y - 52,
               vy: -24,
-              text: '¡VIENTO ANDINO!',
+              text: '¡TORMENTA DEL AGUIJÓN!',
               color: '#FDE047',
               life: 1.15,
               maxLife: 1.15,
@@ -3094,21 +3368,21 @@ export class GameSimulation {
     if (b.windupTimer > 0) {
       b.windupTimer -= dt;
       if (b.windupTimer <= 0) {
-        const bossShotMult = b.level === 1 ? 0.8 : Math.min(1.18, 0.92 + (b.level - 2) * 0.08);
+        const bossShotMult = b.level === 1 ? 0.8 : Math.min(1.22, 0.92 + (b.level - 2) * 0.09);
         if (b.windupKind === 'beam') {
           const lanes = b.level >= 4 ? 3 : 2;
           for (let k = -lanes; k <= lanes; k++) {
             this.spawnEnemyBullet(
               b.x - 40,
-              b.y + k * 9,
-              (-400 - b.level * 22) * bossShotMult,
+              b.y + k * (b.level === 4 ? 14 : 9),
+              (-410 - b.level * 24) * bossShotMult,
               k * 20 * bossShotMult,
-              '#F43F5E',
+              b.level === 4 ? '#22D3EE' : '#F43F5E',
               'sniper'
             );
           }
         } else if (b.windupKind === 'boomerang') {
-          const count = b.phase === 2 ? 4 : 3;
+          const count = b.level >= 5 ? (b.phase === 2 ? 5 : 4) : b.phase === 2 ? 4 : 3;
           for (let i = 0; i < count; i++) {
             const spread = (i - (count - 1) / 2) * 105 * bossShotMult;
             this.spawnEnemyBullet(b.x - 32, b.y, -385 * bossShotMult, spread, '#FACC15', 'boomerang', {
@@ -3125,7 +3399,7 @@ export class GameSimulation {
               b.y,
               (-260 - i * 24) * bossShotMult,
               vy,
-              '#34D399',
+              b.level === 2 ? '#FB7185' : '#34D399',
               'bounce_orb',
               {
                 gravity: 480,
@@ -3135,6 +3409,7 @@ export class GameSimulation {
             );
           }
         } else if (b.windupKind === 'anvil') {
+          // Venom mortars / heavy acid drops
           const count = b.phase === 2 ? 5 : 3;
           for (let i = 0; i < count; i++) {
             this.spawnEnemyBullet(b.x - 26, b.y - 14, (-195 - i * 68) * bossShotMult, -240, '#E879F9', 'bounce_orb', {
@@ -3147,35 +3422,55 @@ export class GameSimulation {
           this.spawnEnemyBullet(
             b.x - 36,
             b.y,
-            -140 * bossShotMult,
-            (this.playerY - b.y) * 0.16,
+            -145 * bossShotMult,
+            (this.playerY - b.y) * 0.18,
             '#C084FC',
             'gravity_orb',
             {
-              radius: 13,
+              radius: 14,
             }
           );
           for (const side of [-1, 1]) {
             this.spawnEnemyBullet(
               b.x - 30,
               b.y + side * 26,
-              -265 * bossShotMult,
-              side * 75 * bossShotMult,
+              -275 * bossShotMult,
+              side * 78 * bossShotMult,
               '#FDE047',
-              'spore'
+              'stinger'
             );
           }
         } else if (b.windupKind === 'dash') {
-          for (let i = 0; i < 6; i++) {
-            const ang = (i / 6) * Math.PI * 2;
-            this.spawnEnemyBullet(
-              b.x - 20,
-              b.y,
-              (Math.cos(ang) * 210 - 80) * bossShotMult,
-              Math.sin(ang) * 210 * bossShotMult,
-              '#FACC15',
-              'spore'
-            );
+          if (b.level === 3 && !b.isMiniBoss) {
+            // Avispa Xeno-Reina: rapid piercing stinger dash salvo aimed at player!
+            const adx = this.playerX - b.x;
+            const ady = this.playerY - b.y;
+            const baseAng = Math.atan2(ady, adx);
+            for (let s = -2; s <= 2; s++) {
+              const ang = baseAng + s * 0.16;
+              this.spawnEnemyBullet(
+                b.x - 34,
+                b.y,
+                Math.cos(ang) * 390 * bossShotMult,
+                Math.sin(ang) * 390 * bossShotMult,
+                '#FACC15',
+                'stinger'
+              );
+            }
+          } else {
+            // Trilobites Nv.1: radial fossil burst when armor unlocks
+            const ring = b.phase === 2 ? 8 : 6;
+            for (let i = 0; i < ring; i++) {
+              const ang = (i / ring) * Math.PI * 2;
+              this.spawnEnemyBullet(
+                b.x - 20,
+                b.y,
+                (Math.cos(ang) * 200 - 75) * bossShotMult,
+                Math.sin(ang) * 200 * bossShotMult,
+                '#FACC15',
+                'spore'
+              );
+            }
           }
         } else {
           const count = b.phase === 2 ? 7 : 5;
@@ -3184,46 +3479,45 @@ export class GameSimulation {
             this.spawnEnemyBullet(
               b.x - 30,
               b.y,
-              Math.cos(ang) * 245 * bossShotMult,
-              Math.sin(ang) * 245 * bossShotMult,
+              Math.cos(ang) * 250 * bossShotMult,
+              Math.sin(ang) * 250 * bossShotMult,
               '#FB923C',
-              'spore'
+              b.level === 3 ? 'stinger' : 'spore'
             );
           }
         }
-        b.fireTimer = bossCfg.fireInterval * (b.phase === 2 ? 0.78 : 1);
+        b.fireTimer = bossCfg.fireInterval * (b.phase === 2 ? 0.76 : 1);
       }
     } else if (b.x <= b.targetX + 12) {
       b.fireTimer -= dt;
       if (b.fireTimer <= 0) {
         const roll = Math.random();
         if (b.level === 1) {
+          // Lv.1 Trilobites: 1 bespoke primary mechanic (carapace + radial fossil burst)
           b.windupKind = b.isMiniBoss
-            ? roll < 0.6
-              ? 'boomerang'
-              : 'fan'
-            : roll < 0.42
-            ? 'dash'
-            : roll < 0.74
-            ? 'fan'
-            : 'beam';
+            ? roll < 0.6 ? 'boomerang' : 'fan'
+            : 'dash';
         } else if (b.level === 2) {
-          b.windupKind = roll < 0.55 ? 'bounce_orb' : roll < 0.8 ? 'fan' : 'beam';
+          // Lv.2 Mariquita: 2 mechanics (bouncy parasite eggs + elytra spot fan)
+          b.windupKind = roll < 0.52 ? 'bounce_orb' : 'fan';
         } else if (b.level === 3) {
-          b.windupKind = roll < 0.5 ? 'anvil' : roll < 0.78 ? 'dash' : 'beam';
+          // Lv.3 Avispa: 3 mechanics (stinger fan + predator lunge + venom mortars)
+          b.windupKind = roll < 0.36 ? 'fan' : roll < 0.68 ? 'dash' : 'anvil';
         } else if (b.level === 4) {
-          b.windupKind = roll < 0.42 ? 'bounce_orb' : roll < 0.75 ? 'beam' : 'boomerang';
+          // Lv.4 Mantis: 4 mechanics (spectral blink active above + scythe boomerangs + twin optic beams + ricochet orbs)
+          b.windupKind = roll < 0.35 ? 'boomerang' : roll < 0.7 ? 'beam' : 'bounce_orb';
         } else {
+          // Lv.5 Escorpión: 5 mechanics (wind gale active above + gravity telson + chitin meteors + acid beam + pincer nova boomerangs)
           b.windupKind =
-            roll < 0.36
+            roll < 0.28
               ? 'gravity_well'
-              : roll < 0.62
-              ? 'boomerang'
-              : roll < 0.84
+              : roll < 0.55
               ? 'bounce_orb'
-              : 'beam';
+              : roll < 0.8
+              ? 'beam'
+              : 'boomerang';
         }
-        b.windupTimer = b.windupKind === 'beam' || b.windupKind === 'gravity_well' ? 0.58 : 0.38;
+        b.windupTimer = b.windupKind === 'beam' || b.windupKind === 'gravity_well' ? 0.56 : 0.38;
         if (b.phase === 2 && this.enemies.length < 4 && Math.random() < 0.45) {
           this.spawnEnemy(b.level >= 4 ? 'hornet' : b.level >= 2 ? 'flanker' : 'mosquito');
         }
@@ -3392,7 +3686,7 @@ export class GameSimulation {
       ? Math.max(1, levelWaves.indexOf(wave) + 1)
       : levelWaves.length;
     const bossCfg = this.getActiveBossConfig(this.levelIndex, this.boss.isMiniBoss);
-    const loadout = computeFusedLoadout(this.speciesLevels, this.config);
+    const loadout = this.getLoadout();
     const maxCd =
       loadout.utriculariaLevel > 0
         ? this.config.player.specialCooldownSec * (1 - loadout.utriculariaLevel * 0.1)
@@ -3401,10 +3695,16 @@ export class GameSimulation {
     const slots = resolveAbilitySlots(this.speciesLevels, this.primarySpecies, this.secondarySpecies);
     this.primarySpecies = slots.primary;
     this.secondarySpecies = slots.secondary;
+    const isApexFusion = loadout.isSuperSaiyanFusion && loadout.fusedPair !== null;
+    const apexMeta =
+      isApexFusion && loadout.fusedPair
+        ? getApexFusionMeta(loadout.fusedPair[0], loadout.fusedPair[1], this.config)
+        : null;
     const secMeta = SECONDARY_ABILITY_META[this.secondarySpecies];
+    const effectiveMaxCd = apexMeta ? apexMeta.cooldownSec : secMeta.cooldownSec;
     const secCharge = Math.max(
       0,
-      Math.min(1, 1 - this.secondaryCooldown / Math.max(0.1, this.secondaryMaxCooldown || secMeta.cooldownSec))
+      Math.min(1, 1 - this.secondaryCooldown / Math.max(0.1, this.secondaryMaxCooldown || effectiveMaxCd))
     );
 
     this.checkLiveHighScoreProgress();
@@ -3432,12 +3732,17 @@ export class GameSimulation {
       activeSlotsCount: loadout.activeSpecies.length,
       maxSlots: MAX_ACTIVE_SPECIES,
       secretEvolution: loadout.secretEvolution,
+      isSuperSaiyanFusion: loadout.isSuperSaiyanFusion,
+      apexFusionName: apexMeta?.title ?? null,
+      apexFusionAutoName: apexMeta?.autoName ?? null,
+      apexFusionManualName: apexMeta?.manualName ?? null,
+      portalActive: this.portal !== null,
       primarySpecies: this.primarySpecies,
       secondarySpecies: this.secondarySpecies,
-      secondaryName: secMeta.name,
+      secondaryName: apexMeta ? apexMeta.manualName : secMeta.name,
       secondaryCharge: secCharge,
-      secondaryCooldownSec: secMeta.cooldownSec,
-      canSwapAbilities: slots.canSwap,
+      secondaryCooldownSec: effectiveMaxCd,
+      canSwapAbilities: slots.canSwap && !isApexFusion,
       invasionIntensity: this.invasionIntensity,
       invasionAlertLabel: this.invasionAlertLabel,
       gamepadConnected: this.gamepadConnected,
@@ -3496,6 +3801,7 @@ export class GameSimulation {
 
   public render(ctx: CanvasRenderingContext2D) {
     const shakeMag = this.trauma * this.trauma * 12;
+    const loadout = this.getLoadout();
     const secMeta = SECONDARY_ABILITY_META[this.secondarySpecies];
     const secCharge = Math.max(
       0,
@@ -3514,6 +3820,8 @@ export class GameSimulation {
       landscapeBlend: this.landscapeBlend,
       invasionIntensity: this.invasionIntensity,
       invasionAlertLabel: this.invasionAlertLabel,
+      superSaiyanActive: loadout.isSuperSaiyanFusion,
+      portal: this.portal,
       shakeX: (Math.random() - 0.5) * 2 * shakeMag,
       shakeY: (Math.random() - 0.5) * 2 * shakeMag,
       playerX: this.playerX,

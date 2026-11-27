@@ -114,6 +114,11 @@ function createInitialHud(cfg: GameConfig): HudSnapshot {
     activeSlotsCount: 1,
     maxSlots: 2,
     secretEvolution: null,
+    isSuperSaiyanFusion: false,
+    apexFusionName: null,
+    apexFusionAutoName: null,
+    apexFusionManualName: null,
+    portalActive: false,
     primarySpecies: 'dionaea',
     secondarySpecies: 'dionaea',
     secondaryName: SECONDARY_ABILITY_META.dionaea.name,
@@ -688,19 +693,12 @@ export function CarnivoraShmupGame({
       }
     };
 
-    const scheduleNext = (renderMs: number) => {
+    const scheduleNext = () => {
       if (disposed) return;
-      if (renderMs > 6) {
-        yieldTimer = window.setTimeout(() => {
-          if (!disposed) rafId = requestAnimationFrame(frame);
-        }, 4);
-      } else {
-        rafId = requestAnimationFrame(frame);
-      }
+      rafId = requestAnimationFrame(frame);
     };
 
     const frame = (now: number) => {
-      const t0 = performance.now();
       const dt = (now - lastTime) / 1000;
       lastTime = now;
 
@@ -718,7 +716,7 @@ export function CarnivoraShmupGame({
 
       if (!disposed) {
         if (curStatus === 'playing') {
-          scheduleNext(performance.now() - t0);
+          scheduleNext();
         } else {
           yieldTimer = window.setTimeout(() => {
             if (!disposed) {
@@ -1727,6 +1725,19 @@ export function CarnivoraShmupGame({
               <h2 className="text-2xl sm:text-3xl font-display font-black text-white mt-1">
                 {status === 'victory' ? '¡Invasión Neutralizada!' : 'Misión Fallida'}
               </h2>
+              {status === 'victory' && (
+                <div
+                  data-testid="queen-mothership-teaser"
+                  className="mt-2.5 p-2.5 rounded-xl bg-rose-950/70 border border-rose-400/60 text-left space-y-0.5"
+                >
+                  <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-rose-300">
+                    Portal Dimensional · La Reina Nodriza
+                  </div>
+                  <p className="text-xs font-semibold text-white leading-snug">
+                    ¡Cruzaste el portal hacia la Reina Nodriza! La batalla final estará disponible en la siguiente actualización.
+                  </p>
+                </div>
+              )}
               {hud.isNewHighScore && hud.score > 0 && (
                 <div
                   data-testid="gameover-new-record"
