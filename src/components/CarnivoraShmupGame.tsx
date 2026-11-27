@@ -192,6 +192,7 @@ export function CarnivoraShmupGame({
   const [isFullscreen, setIsFullscreen] = useState<boolean>(() =>
     typeof document !== 'undefined' ? Boolean(document.fullscreenElement) : false
   );
+  const [orientationHint, setOrientationHint] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -211,8 +212,14 @@ export function CarnivoraShmupGame({
     anchorPointerY: number;
   } | null>(null);
 
-  const canFullscreen =
-    typeof document !== 'undefined' && Boolean(document.documentElement?.requestFullscreen);
+  type FullscreenDocEl = HTMLElement & {
+    webkitRequestFullscreen?: () => Promise<void> | void;
+  };
+  const docEl = typeof document !== 'undefined' ? (document.documentElement as FullscreenDocEl) : null;
+  const canFullscreen = Boolean(docEl && (docEl.requestFullscreen || docEl.webkitRequestFullscreen));
+  const canOrientationLock =
+    typeof screen !== 'undefined' &&
+    Boolean(screen.orientation && 'lock' in screen.orientation);
 
   statusRef.current = status;
   hudRef.current = hud;
@@ -320,21 +327,30 @@ export function CarnivoraShmupGame({
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const syncOrientationGate = () => {
-      setRequiresLandscape(shouldRequireLandscape(window.innerWidth, window.innerHeight, isTouchDevice));
+      const w = window.visualViewport?.width ?? window.innerWidth;
+      const h = window.visualViewport?.height ?? window.innerHeight;
+      const nextRequires = shouldRequireLandscape(w, h, isTouchDevice);
+      setRequiresLandscape(nextRequires);
+      if (!nextRequires) {
+        setOrientationHint(null);
+      }
     };
     const syncFullscreen = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement));
+      const docWithWebkit = document as Document & { webkitFullscreenElement?: Element | null };
+      setIsFullscreen(Boolean(document.fullscreenElement || docWithWebkit.webkitFullscreenElement));
       syncOrientationGate();
     };
     syncOrientationGate();
     window.addEventListener('resize', syncOrientationGate);
     window.addEventListener('orientationchange', syncOrientationGate);
     window.visualViewport?.addEventListener('resize', syncOrientationGate);
+    screen.orientation?.addEventListener?.('change', syncOrientationGate);
     document.addEventListener('fullscreenchange', syncFullscreen);
     return () => {
       window.removeEventListener('resize', syncOrientationGate);
       window.removeEventListener('orientationchange', syncOrientationGate);
       window.visualViewport?.removeEventListener('resize', syncOrientationGate);
+      screen.orientation?.removeEventListener?.('change', syncOrientationGate);
       document.removeEventListener('fullscreenchange', syncFullscreen);
     };
   }, [isTouchDevice]);
@@ -347,25 +363,63 @@ export function CarnivoraShmupGame({
     }
   }, [requiresLandscape]);
 
-  const requestMobileLandscapeFullscreen = useCallback(async () => {
-    try {
-      if (canFullscreen && !document.fullscreenElement && containerRef.current?.requestFullscreen) {
-        await containerRef.current.requestFullscreen();
+  const requestMobileLandscapeFullscreen = useCallback(
+    async (showFeedback = false) => {
+      if (showFeedback) {
+        setOrientationHint(null);
       }
-    } catch {
-      // Ignore fullscreen denial (e.g. iOS Safari)
-    }
-    try {
-      const orientation = screen.orientation as ScreenOrientation & {
-        lock?: (mode: string) => Promise<void>;
-      };
+      const targetEl = (typeof document !== 'undefined'
+        ? document.documentElement
+        : containerRef.current) as FullscreenDocEl | null;
+      const docWithWebkit = typeof document !== 'undefined'
+        ? (document as Document & { webkitFullscreenElement?: Element | null })
+        : null;
+      const alreadyFullscreen = Boolean(docWithWebkit?.fullscreenElement || docWithWebkit?.webkitFullscreenElement);
+
+      if (targetEl && !alreadyFullscreen) {
+        try {
+          if (targetEl.requestFullscreen) {
+            try {
+              await targetEl.requestFullscreen({ navigationUI: 'hide' } as FullscreenOptions);
+            } catch {
+              await targetEl.requestFullscreen();
+            }
+          } else if (targetEl.webkitRequestFullscreen) {
+            await targetEl.webkitRequestFullscreen();
+          }
+        } catch {
+          // Ignore fullscreen denial (e.g. iOS Safari or blocked gesture)
+        }
+      }
+
+      const orientation = typeof screen !== 'undefined'
+        ? (screen.orientation as ScreenOrientation & { lock?: (mode: string) => Promise<void> })
+        : null;
       if (orientation?.lock) {
-        await orientation.lock('landscape');
+        try {
+          await orientation.lock('landscape');
+        } catch {
+          try {
+            await orientation.lock('landscape-primary');
+          } catch {
+            // Ignore orientation lock denial when unsupported or blocked by OS setting
+          }
+        }
       }
-    } catch {
-      // Ignore orientation lock denial when unsupported
-    }
-  }, [canFullscreen]);
+
+      if (showFeedback && typeof window !== 'undefined') {
+        await new Promise((resolve) => window.setTimeout(resolve, 180));
+        const w = window.visualViewport?.width ?? window.innerWidth;
+        const h = window.visualViewport?.height ?? window.innerHeight;
+        if (shouldRequireLandscape(w, h, isTouchDevice)) {
+          setOrientationHint(
+            'Tu navegador no permitió girar automáticamente. Activá "Giro automático" en tu teléfono y ponelo horizontal.'
+          );
+        }
+      }
+    },
+    [isTouchDevice]
+  );
 
   const handleToggleFullscreen = useCallback(async () => {
     try {
@@ -1791,15 +1845,21 @@ export function CarnivoraShmupGame({
             </div>
           )}
 
-          {canFullscreen && (
+          {(canFullscreen || canOrientationLock) && (
             <button
               type="button"
-              onClick={() => void requestMobileLandscapeFullscreen()}
+              onClick={() => void requestMobileLandscapeFullscreen(true)}
               className="touch-manipulation inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-display font-bold text-sm border-2 border-[#050810] shadow-[0_4px_0_#050810] cursor-pointer"
             >
               <Maximize2 className="w-4 h-4" />
-              <span>Intentar pantalla horizontal</span>
+              <span>Pasar a pantalla horizontal</span>
             </button>
+          )}
+
+          {orientationHint && (
+            <p className="max-w-xs px-3 py-2 rounded-xl bg-amber-500/15 border border-amber-400/50 text-[11px] font-medium text-amber-200 leading-relaxed">
+              {orientationHint}
+            </p>
           )}
         </div>
       )}
